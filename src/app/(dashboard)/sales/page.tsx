@@ -15,6 +15,8 @@ import {
   X,
   CheckCircle2,
   Loader2,
+  Edit2,
+  Trash2,
 } from "lucide-react";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -72,12 +74,18 @@ export default function SalesOrdersPage() {
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Edit state
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+
+  // Save to contacts toggle (option to not add to contacts)
+  const [saveToContacts, setSaveToContacts] = useState(true);
+
   // Referral states for sale
   const [referralOption, setReferralOption] = useState<"NONE" | "PARTNER" | "CUSTOMER">("NONE");
   const [referralPartner, setReferralPartner] = useState("Vivek");
   const [referralCustomerName, setReferralCustomerName] = useState("");
 
-  // Form state for new offline sale
+  // Form state for new / edit offline sale
   const [formData, setFormData] = useState({
     date: "",
     customerName: "",
@@ -133,6 +141,7 @@ export default function SalesOrdersPage() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       if (params.get("action") === "new-order") {
+        setEditingOrderId(null);
         setIsModalOpen(true);
       }
     }
@@ -141,12 +150,123 @@ export default function SalesOrdersPage() {
   }, []);
 
   const channels = [
-    { name: "Offline / Direct Store", type: "PHYSICAL", status: "Active", count: orders.filter(o => o.channel.includes("Offline")).length },
+    {
+      name: "Offline / Direct Store",
+      type: "PHYSICAL",
+      status: "Active",
+      count: orders.filter((o) => o.channel.includes("Offline")).length,
+    },
     { name: "Website (D2C)", type: "ONLINE", status: "Active", count: 0 },
     { name: "Amazon Marketplace", type: "MARKETPLACE", status: "Active", count: 0 },
     { name: "Flipkart Marketplace", type: "MARKETPLACE", status: "Active", count: 0 },
     { name: "B2B Wholesale", type: "B2B", status: "Active", count: 0 },
   ];
+
+  const handleOpenCreate = () => {
+    setEditingOrderId(null);
+    setSaveToContacts(true);
+    setReferralOption("NONE");
+    setReferralCustomerName("");
+    setReferralPartner(partnersList[0]?.name || "Vivek");
+    setFormData({
+      date: new Date().toISOString().split("T")[0],
+      customerName: "",
+      customerPhone: "",
+      itemDescription: "",
+      quantity: "1",
+      unitPrice: "",
+      discount: "0",
+      gstRate: "5",
+      paymentMode: "UPI",
+      paymentStatus: "PAID",
+      notes: "",
+    });
+    setFormError("");
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (order: OrderRecord) => {
+    setEditingOrderId(order.id);
+    setSaveToContacts(true);
+    setFormError("");
+
+    // Parse referral from notes if present
+    let cleanedNotes = order.notes || "";
+    let refOpt: "NONE" | "PARTNER" | "CUSTOMER" = "NONE";
+    let refPartner = partnersList[0]?.name || "Vivek";
+    let refCustName = "";
+
+    if (cleanedNotes.includes("Referred by Partner:")) {
+      refOpt = "PARTNER";
+      const match = cleanedNotes.match(/\[Referred by Partner:\s*(.*?)\]/);
+      if (match) {
+        refPartner = match[1];
+        cleanedNotes = cleanedNotes.replace(match[0], "").trim();
+      }
+    } else if (cleanedNotes.includes("Referred by Customer:")) {
+      refOpt = "CUSTOMER";
+      const match = cleanedNotes.match(/\[Referred by Customer:\s*(.*?)\]/);
+      if (match) {
+        refCustName = match[1];
+        cleanedNotes = cleanedNotes.replace(match[0], "").trim();
+      }
+    }
+
+    setReferralOption(refOpt);
+    setReferralPartner(refPartner);
+    setReferralCustomerName(refCustName);
+
+    setFormData({
+      date: order.date,
+      customerName:
+        order.customerName === "Walk-in Retail Customer" ? "" : order.customerName,
+      customerPhone: order.customerPhone || "",
+      itemDescription: order.itemDescription,
+      quantity: order.quantity.toString(),
+      unitPrice: (order.unitPricePaise / 100).toString(),
+      discount: (order.discountPaise / 100).toString(),
+      gstRate: "5",
+      paymentMode: order.paymentMode.includes("CASH")
+        ? "CASH"
+        : order.paymentMode.includes("CARD")
+        ? "CARD"
+        : "UPI",
+      paymentStatus: order.paymentStatus,
+      notes: cleanedNotes,
+    });
+
+    setIsModalOpen(true);
+  };
+
+  const handleDelete = async (order: OrderRecord) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete order "${order.orderNumber}" of ${formatINR(
+        order.totalPaise
+      )}? This will adjust revenue and customer lifetime spend accordingly.`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      const res = await fetch(`/api/orders?id=${order.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to delete order");
+      }
+
+      setOrders((prev) => prev.filter((o) => o.id !== order.id));
+      if (selectedDrawerOrder?.id === order.id) {
+        setSelectedDrawerOrder(null);
+      }
+      setSuccessMessage(`Order ${order.orderNumber} deleted successfully.`);
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Delete order error:", err);
+      alert(err.message || "Could not delete order. Please try again.");
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,49 +298,50 @@ export default function SalesOrdersPage() {
     setIsSubmitting(true);
 
     try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
+      const isEditing = Boolean(editingOrderId);
+      const url = "/api/orders";
+      const method = isEditing ? "PUT" : "POST";
+
+      const payload = {
+        ...(isEditing ? { id: editingOrderId } : {}),
+        ...formData,
+        saveToContacts,
+        referralType: referralOption,
+        referralPartner: referralOption === "PARTNER" ? referralPartner : undefined,
+        referralCustomerName:
+          referralOption === "CUSTOMER" ? referralCustomerName : undefined,
+      };
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...formData,
-          referralType: referralOption,
-          referralPartner: referralOption === "PARTNER" ? referralPartner : undefined,
-          referralCustomerName: referralOption === "CUSTOMER" ? referralCustomerName : undefined,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Failed to save order to database");
+        throw new Error(errData.error || `Failed to ${isEditing ? "update" : "save"} order`);
       }
 
       const data = await res.json();
       const savedOrder: OrderRecord = data.order;
 
-      setOrders((prev) => [savedOrder, ...prev]);
+      if (isEditing) {
+        setOrders((prev) => prev.map((o) => (o.id === savedOrder.id ? savedOrder : o)));
+        if (selectedDrawerOrder?.id === savedOrder.id) {
+          setSelectedDrawerOrder(savedOrder);
+        }
+        setSuccessMessage(`Order ${savedOrder.orderNumber} updated successfully!`);
+      } else {
+        setOrders((prev) => [savedOrder, ...prev]);
+        setSuccessMessage(
+          `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved successfully!`
+        );
+      }
+
       setIsModalOpen(false);
-      setSuccessMessage(
-        `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved to database successfully!`
-      );
 
-      // Reset
-      setFormData({
-        date: new Date().toISOString().split("T")[0],
-        customerName: "",
-        customerPhone: "",
-        itemDescription: "",
-        quantity: "1",
-        unitPrice: "",
-        discount: "0",
-        gstRate: "5",
-        paymentMode: "UPI",
-        paymentStatus: "PAID",
-        notes: "",
-      });
-      setReferralOption("NONE");
-      setReferralCustomerName("");
-
-      // Refresh customer list to include any new walk-in customer
+      // Refresh customer list if added to contacts
       fetch("/api/customers")
         .then((r) => r.json())
         .then((cData) => {
@@ -231,7 +352,7 @@ export default function SalesOrdersPage() {
       setTimeout(() => setSuccessMessage(""), 5000);
     } catch (err: any) {
       console.error("Order submit error:", err);
-      setFormError(err?.message || "Could not save order to database. Please try again.");
+      setFormError(err?.message || "Could not save order. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -255,12 +376,12 @@ export default function SalesOrdersPage() {
             Sales & Orders
           </h2>
           <p className="text-xs text-[#77736A] mt-0.5">
-            Capture offline customer orders, import marketplace settlements, and track line-item GST.
+            Capture offline customer orders, import marketplace settlements, and manage line-item GST.
           </p>
         </div>
 
         <button
-          onClick={() => setIsModalOpen(true)}
+          onClick={handleOpenCreate}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -314,7 +435,9 @@ export default function SalesOrdersPage() {
           {loadingOrders ? (
             <div className="p-12 text-center text-[#77736A]">
               <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2.5 text-[#E4BF22]" />
-              <p className="text-xs font-semibold text-[#493020]">Loading orders from database...</p>
+              <p className="text-xs font-semibold text-[#493020]">
+                Loading orders from database...
+              </p>
             </div>
           ) : orders.length === 0 ? (
             <div className="p-12 text-center text-[#77736A]">
@@ -324,7 +447,7 @@ export default function SalesOrdersPage() {
                 Click "+ Record Offline Sale" to add a customer sale with line items, tax, and payment details.
               </p>
               <button
-                onClick={() => setIsModalOpen(true)}
+                onClick={handleOpenCreate}
                 className="mt-4 px-3.5 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
               >
                 + Record Offline Sale
@@ -376,12 +499,24 @@ export default function SalesOrdersPage() {
                       </div>
                     </div>
 
-                    <div className="flex justify-end pt-1">
+                    <div className="flex items-center justify-end gap-3 pt-1 border-t border-[#E8E2D5]/60 text-xs">
                       <button
                         onClick={() => setSelectedDrawerOrder(ord)}
-                        className="text-xs font-bold text-[#493020] hover:underline"
+                        className="font-bold text-[#493020] hover:underline"
                       >
-                        View Full Details →
+                        Details
+                      </button>
+                      <button
+                        onClick={() => handleOpenEdit(ord)}
+                        className="font-semibold text-[#A96B13] hover:underline"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(ord)}
+                        className="font-semibold text-rose-600 hover:underline"
+                      >
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -400,7 +535,7 @@ export default function SalesOrdersPage() {
                       <th className="px-5 py-3">Channel</th>
                       <th className="px-5 py-3">Payment</th>
                       <th className="px-5 py-3 text-right">Total (₹)</th>
-                      <th className="px-5 py-3 text-center">Details</th>
+                      <th className="px-5 py-3 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E8E2D5] text-[#29271F]">
@@ -447,12 +582,28 @@ export default function SalesOrdersPage() {
                           <MoneyDisplay paise={ord.totalPaise} />
                         </td>
                         <td className="px-5 py-3 text-center">
-                          <button
-                            onClick={() => setSelectedDrawerOrder(ord)}
-                            className="text-[11px] font-semibold text-[#493020] hover:underline"
-                          >
-                            View
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => setSelectedDrawerOrder(ord)}
+                              className="text-[11px] font-semibold text-[#493020] hover:underline"
+                            >
+                              View
+                            </button>
+                            <span className="text-[#E8E2D5]">|</span>
+                            <button
+                              onClick={() => handleOpenEdit(ord)}
+                              className="text-[11px] font-semibold text-[#A96B13] hover:underline"
+                            >
+                              Edit
+                            </button>
+                            <span className="text-[#E8E2D5]">|</span>
+                            <button
+                              onClick={() => handleDelete(ord)}
+                              className="text-[11px] font-semibold text-rose-600 hover:underline"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -497,17 +648,19 @@ export default function SalesOrdersPage() {
         </div>
       )}
 
-      {/* Record Offline Sale Modal */}
+      {/* Record / Edit Offline Sale Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#493020]/50 backdrop-blur-xs">
           <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl border border-[#E8E2D5] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3.5 border-b border-[#E8E2D5]">
               <div>
                 <h3 className="text-sm font-bold text-[#29271F] leading-tight">
-                  Record Offline Sale
+                  {editingOrderId ? "Edit Sales Order" : "Record Offline Sale"}
                 </h3>
                 <p className="text-[11px] text-[#77736A]">
-                  Direct retail order with GST & payment allocation
+                  {editingOrderId
+                    ? "Update order details, tax rates, and customer notes"
+                    : "Direct retail order with GST & payment allocation"}
                 </p>
               </div>
               <button
@@ -566,6 +719,25 @@ export default function SalesOrdersPage() {
                   />
                 </div>
               </div>
+
+              {/* Option to automatically add or not add to contacts (with duplicate protection) */}
+              {!editingOrderId && (
+                <div className="flex items-center gap-2 px-1">
+                  <input
+                    type="checkbox"
+                    id="saveToContactsCheckbox"
+                    checked={saveToContacts}
+                    onChange={(e) => setSaveToContacts(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-[#E4BF22] accent-[#E4BF22] focus:ring-0 cursor-pointer"
+                  />
+                  <label
+                    htmlFor="saveToContactsCheckbox"
+                    className="text-[11px] text-[#29271F] font-medium cursor-pointer select-none"
+                  >
+                    Save contact to customer directory (updates automatically if duplicate phone exists)
+                  </label>
+                </div>
+              )}
 
               {/* SKU Quick Select Dropdown */}
               <div>
@@ -801,7 +973,13 @@ export default function SalesOrdersPage() {
                   className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isSubmitting ? "Saving Order..." : "Record Order"}</span>
+                  <span>
+                    {isSubmitting
+                      ? "Saving..."
+                      : editingOrderId
+                      ? "Update Order"
+                      : "Record Order"}
+                  </span>
                 </button>
               </div>
             </form>
@@ -868,7 +1046,8 @@ export default function SalesOrdersPage() {
                     {selectedDrawerOrder.itemDescription}
                   </div>
                   <div className="text-[#77736A] text-[11px] mt-0.5">
-                    Qty: {selectedDrawerOrder.quantity} • Unit Price: {formatINR(selectedDrawerOrder.unitPricePaise)}
+                    Qty: {selectedDrawerOrder.quantity} • Unit Price:{" "}
+                    {formatINR(selectedDrawerOrder.unitPricePaise)}
                   </div>
                 </div>
 
@@ -904,7 +1083,8 @@ export default function SalesOrdersPage() {
                     Payment Mode
                   </span>
                   <div className="font-semibold text-[#29271F] mt-0.5">
-                    {selectedDrawerOrder.paymentMode} • Status: {selectedDrawerOrder.paymentStatus}
+                    {selectedDrawerOrder.paymentMode} • Status:{" "}
+                    {selectedDrawerOrder.paymentStatus}
                   </div>
                 </div>
 
@@ -921,12 +1101,27 @@ export default function SalesOrdersPage() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-[#E8E2D5]">
+            <div className="pt-4 border-t border-[#E8E2D5] flex gap-2">
+              <button
+                onClick={() => {
+                  handleOpenEdit(selectedDrawerOrder);
+                  setSelectedDrawerOrder(null);
+                }}
+                className="flex-1 py-2 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] rounded-lg transition-colors shadow-xs"
+              >
+                Edit Order
+              </button>
+              <button
+                onClick={() => handleDelete(selectedDrawerOrder)}
+                className="px-3.5 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors border border-rose-200"
+              >
+                Delete
+              </button>
               <button
                 onClick={() => setSelectedDrawerOrder(null)}
-                className="w-full py-2 text-xs font-semibold text-[#29271F] bg-[#FCFAF3] hover:bg-[#E8E2D5] rounded-lg transition-colors border border-[#E8E2D5]"
+                className="px-3 py-2 text-xs font-semibold text-[#29271F] bg-[#FCFAF3] hover:bg-[#E8E2D5] rounded-lg transition-colors border border-[#E8E2D5]"
               >
-                Close Drawer
+                Close
               </button>
             </div>
           </div>

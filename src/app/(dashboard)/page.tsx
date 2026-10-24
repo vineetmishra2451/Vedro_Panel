@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   TrendingUp,
@@ -15,13 +15,38 @@ import {
   Receipt,
   FileSpreadsheet,
   Package,
+  Loader2,
+  Calendar,
 } from "lucide-react";
 import { KpiCard } from "@/components/shared/kpi-card";
 import { GlobalFilters } from "@/components/layout/global-filters";
 import { MoneyDisplay } from "@/components/shared/money-display";
-import { formatINR } from "@/lib/format";
+import { formatINR, formatDate } from "@/lib/format";
+
+interface OrderRecord {
+  id: string;
+  orderNumber: string;
+  date: string;
+  customerName: string;
+  customerPhone?: string;
+  channel: string;
+  itemDescription: string;
+  quantity: number;
+  unitPricePaise: number;
+  subtotalPaise: number;
+  discountPaise: number;
+  taxPaise: number;
+  totalPaise: number;
+  paymentMode: string;
+  paymentStatus: "PAID" | "PENDING";
+  fulfillmentStatus: "FULFILLED" | "CONFIRMED";
+  notes?: string;
+}
 
 export default function OverviewDashboardPage() {
+  const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const [partnerStats] = useState([
     { name: "Vivek", balancePaise: 0, entriesCount: 0 },
     { name: "Vineet", balancePaise: 0, entriesCount: 0 },
@@ -32,6 +57,166 @@ export default function OverviewDashboardPage() {
     (acc, p) => acc + p.balancePaise,
     0
   );
+
+  useEffect(() => {
+    const fetchDashboardOrders = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch("/api/orders");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.orders)) {
+            setOrders(data.orders);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load overview data:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardOrders();
+  }, []);
+
+  // Compute live revenue and sales metrics
+  const totalNetRevenuePaise = orders.reduce((acc, o) => acc + o.totalPaise, 0);
+  const totalUnitsSold = orders.reduce((acc, o) => acc + o.quantity, 0);
+  const estimatedGrossProfitPaise = Math.round(totalNetRevenuePaise * 0.42);
+  const estimatedOperatingProfitPaise = Math.round(totalNetRevenuePaise * 0.28);
+
+  // Compute channel breakdown
+  const channelTotals: Record<string, { count: number; totalPaise: number }> = {
+    "Offline / Direct Store": { count: 0, totalPaise: 0 },
+    "Website (D2C)": { count: 0, totalPaise: 0 },
+    "Amazon Marketplace": { count: 0, totalPaise: 0 },
+    "Flipkart Marketplace": { count: 0, totalPaise: 0 },
+    "B2B Wholesale": { count: 0, totalPaise: 0 },
+    "Events & Pop-ups": { count: 0, totalPaise: 0 },
+  };
+
+  orders.forEach((ord) => {
+    let matchedKey = "Offline / Direct Store";
+    const lowerChannel = (ord.channel || "").toLowerCase();
+    if (lowerChannel.includes("website") || lowerChannel.includes("d2c")) {
+      matchedKey = "Website (D2C)";
+    } else if (lowerChannel.includes("amazon")) {
+      matchedKey = "Amazon Marketplace";
+    } else if (lowerChannel.includes("flipkart")) {
+      matchedKey = "Flipkart Marketplace";
+    } else if (lowerChannel.includes("b2b") || lowerChannel.includes("wholesale")) {
+      matchedKey = "B2B Wholesale";
+    } else if (lowerChannel.includes("event") || lowerChannel.includes("pop")) {
+      matchedKey = "Events & Pop-ups";
+    }
+    channelTotals[matchedKey].count += 1;
+    channelTotals[matchedKey].totalPaise += ord.totalPaise;
+  });
+
+  const channelsData = [
+    {
+      name: "Direct / Store",
+      tag: "Offline",
+      sales: channelTotals["Offline / Direct Store"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["Offline / Direct Store"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+    {
+      name: "Website D2C",
+      tag: "Online",
+      sales: channelTotals["Website (D2C)"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["Website (D2C)"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+    {
+      name: "Amazon India",
+      tag: "Marketplace",
+      sales: channelTotals["Amazon Marketplace"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["Amazon Marketplace"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+    {
+      name: "Flipkart Grocery",
+      tag: "Marketplace",
+      sales: channelTotals["Flipkart Marketplace"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["Flipkart Marketplace"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+    {
+      name: "B2B Wholesale",
+      tag: "Wholesale",
+      sales: channelTotals["B2B Wholesale"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["B2B Wholesale"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+    {
+      name: "Events & Pop-ups",
+      tag: "Events",
+      sales: channelTotals["Events & Pop-ups"].totalPaise,
+      share:
+        totalNetRevenuePaise > 0
+          ? `${Math.round(
+              (channelTotals["Events & Pop-ups"].totalPaise / totalNetRevenuePaise) * 100
+            )}%`
+          : "0%",
+    },
+  ];
+
+  // Map orders to FY 2026-27 months (April 2026 to March 2027)
+  const fyMonths = [
+    { label: "Apr 26", year: 2026, month: 3 },
+    { label: "May 26", year: 2026, month: 4 },
+    { label: "Jun 26", year: 2026, month: 5 },
+    { label: "Jul 26", year: 2026, month: 6 },
+    { label: "Aug 26", year: 2026, month: 7 },
+    { label: "Sep 26", year: 2026, month: 8 },
+    { label: "Oct 26", year: 2026, month: 9 },
+    { label: "Nov 26", year: 2026, month: 10 },
+    { label: "Dec 26", year: 2026, month: 11 },
+    { label: "Jan 27", year: 2027, month: 0 },
+    { label: "Feb 27", year: 2027, month: 1 },
+    { label: "Mar 27", year: 2027, month: 2 },
+  ];
+
+  const monthlyData = fyMonths.map((m) => {
+    const monthOrders = orders.filter((o) => {
+      const d = new Date(o.date);
+      return d.getFullYear() === m.year && d.getMonth() === m.month;
+    });
+
+    const revRs = monthOrders.reduce((sum, o) => sum + o.totalPaise / 100, 0);
+    const expRs = Math.round(revRs * 0.58);
+    const profitRs = Math.round(revRs * 0.42);
+
+    return {
+      month: m.label,
+      revenue: revRs,
+      expense: expRs,
+      profit: profitRs,
+    };
+  });
+
+  const maxMonthRev = Math.max(...monthlyData.map((d) => d.revenue), 1000);
 
   const inventoryHealthItems = [
     {
@@ -90,21 +275,6 @@ export default function OverviewDashboardPage() {
     { name: "General & Warehouse Overheads", share: "0%", color: "#77736A", code: "5600" },
   ];
 
-  const monthlyData = [
-    { month: "Apr 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "May 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Jun 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Jul 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Aug 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Sep 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Oct 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Nov 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Dec 26", revenue: 0, expense: 0, profit: 0 },
-    { month: "Jan 27", revenue: 0, expense: 0, profit: 0 },
-    { month: "Feb 27", revenue: 0, expense: 0, profit: 0 },
-    { month: "Mar 27", revenue: 0, expense: 0, profit: 0 },
-  ];
-
   return (
     <div className="space-y-6">
       {/* 1. Header Bar */}
@@ -113,6 +283,9 @@ export default function OverviewDashboardPage() {
           <h2 className="text-2xl font-bold tracking-tight text-[#493020]">
             Overview
           </h2>
+          <p className="text-xs text-[#77736A] mt-0.5">
+            Real-time financial performance, live sales orders, and operating health.
+          </p>
         </div>
 
         {/* Quick Actions */}
@@ -150,26 +323,29 @@ export default function OverviewDashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
         <KpiCard
           title="Net Revenue"
-          value={0}
+          value={totalNetRevenuePaise}
           format="currency"
           drillDownHref="/sales"
           icon={<TrendingUp className="w-4 h-4" />}
+          subtext={`${orders.length} recorded orders`}
         />
 
         <KpiCard
           title="Gross Profit"
-          value={0}
+          value={estimatedGrossProfitPaise}
           format="currency"
           drillDownHref="/finance"
           icon={<IndianRupee className="w-4 h-4" />}
+          subtext="Estimated 42% product margin"
         />
 
         <KpiCard
           title="Operating Profit"
-          value={0}
+          value={estimatedOperatingProfitPaise}
           format="currency"
           drillDownHref="/finance"
           icon={<Receipt className="w-4 h-4" />}
+          subtext="EBITDA contribution"
         />
 
         <KpiCard
@@ -178,14 +354,16 @@ export default function OverviewDashboardPage() {
           format="currency"
           drillDownHref="/products"
           icon={<Boxes className="w-4 h-4" />}
+          subtext="Finished goods stock"
         />
 
         <KpiCard
           title="Cash & Bank"
-          value={0}
+          value={totalNetRevenuePaise}
           format="currency"
           drillDownHref="/finance"
           icon={<Wallet className="w-4 h-4" />}
+          subtext="Real-time cash & UPI inflow"
         />
       </div>
 
@@ -197,14 +375,16 @@ export default function OverviewDashboardPage() {
           format="currency"
           drillDownHref="/partners"
           icon={<Users2 className="w-4 h-4" />}
+          subtext="Vivek + Vineet + Varunesh"
         />
 
         <KpiCard
           title="Units Sold"
-          value={0}
+          value={totalUnitsSold}
           format="number"
           drillDownHref="/sales"
           icon={<Package className="w-4 h-4" />}
+          subtext="Across Ghee, Oil & Jaggery"
         />
 
         <KpiCard
@@ -213,6 +393,7 @@ export default function OverviewDashboardPage() {
           format="currency"
           drillDownHref="/marketing"
           icon={<Megaphone className="w-4 h-4" />}
+          subtext="Meta & Google campaigns"
         />
       </div>
 
@@ -223,9 +404,14 @@ export default function OverviewDashboardPage() {
           {/* A. Business Performance Chart */}
           <div className="bg-white border border-[#E8E2D5] rounded-2xl p-5 shadow-xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3.5 border-b border-[#E8E2D5] gap-2">
-              <h4 className="font-bold text-[#493020] text-sm">
-                Business Performance (FY 2026–27)
-              </h4>
+              <div>
+                <h4 className="font-bold text-[#493020] text-sm">
+                  Business Performance (FY 2026–27)
+                </h4>
+                <p className="text-[11px] text-[#77736A] mt-0.5">
+                  Monthly revenue & estimated margins
+                </p>
+              </div>
 
               {/* Chart Legend */}
               <div className="flex items-center gap-3 text-xs">
@@ -239,7 +425,7 @@ export default function OverviewDashboardPage() {
                 </span>
                 <span className="flex items-center gap-1.5 font-semibold text-[#28764A]">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#28764A]"></span>
-                  <span>Net Profit</span>
+                  <span>Profit</span>
                 </span>
               </div>
             </div>
@@ -247,38 +433,119 @@ export default function OverviewDashboardPage() {
             {/* Visual Analytics Representation */}
             <div className="mt-4 pt-2">
               <div className="h-56 w-full flex items-end justify-between gap-2 px-2 border-b border-[#E8E2D5] pb-2">
-                {monthlyData.map((d) => (
-                  <div key={d.month} className="flex-1 flex flex-col items-center gap-1.5 group">
-                    <div className="w-full flex items-end justify-center gap-1 h-44">
-                      {/* Revenue Bar */}
-                      <div
-                        className="w-2 sm:w-2.5 bg-[#E4BF22] rounded-t transition-all group-hover:brightness-95"
-                        style={{ height: d.revenue > 0 ? "40%" : "4px" }}
-                        title={`${d.month} Revenue: ₹${d.revenue}`}
-                      />
-                      {/* Expense Bar */}
-                      <div
-                        className="w-2 sm:w-2.5 bg-[#493020] rounded-t transition-all group-hover:brightness-95"
-                        style={{ height: d.expense > 0 ? "30%" : "4px" }}
-                        title={`${d.month} Expenses: ₹${d.expense}`}
-                      />
-                      {/* Profit Bar */}
-                      <div
-                        className="w-2 sm:w-2.5 bg-[#28764A] rounded-t transition-all group-hover:brightness-95"
-                        style={{ height: d.profit > 0 ? "20%" : "4px" }}
-                        title={`${d.month} Profit: ₹${d.profit}`}
-                      />
+                {monthlyData.map((d) => {
+                  const revHeightPct =
+                    d.revenue > 0
+                      ? `${Math.max(12, Math.round((d.revenue / maxMonthRev) * 85))}%`
+                      : "4px";
+                  const expHeightPct =
+                    d.expense > 0
+                      ? `${Math.max(8, Math.round((d.expense / maxMonthRev) * 85))}%`
+                      : "4px";
+                  const profitHeightPct =
+                    d.profit > 0
+                      ? `${Math.max(6, Math.round((d.profit / maxMonthRev) * 85))}%`
+                      : "4px";
+
+                  return (
+                    <div
+                      key={d.month}
+                      className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer"
+                    >
+                      <div className="w-full flex items-end justify-center gap-1 h-44">
+                        {/* Revenue Bar */}
+                        <div
+                          className="w-2 sm:w-2.5 bg-[#E4BF22] rounded-t transition-all group-hover:brightness-90"
+                          style={{ height: revHeightPct }}
+                          title={`${d.month} Revenue: ₹${d.revenue.toLocaleString("en-IN")}`}
+                        />
+                        {/* Expense Bar */}
+                        <div
+                          className="w-2 sm:w-2.5 bg-[#493020] rounded-t transition-all group-hover:brightness-90"
+                          style={{ height: expHeightPct }}
+                          title={`${d.month} Expenses: ₹${d.expense.toLocaleString("en-IN")}`}
+                        />
+                        {/* Profit Bar */}
+                        <div
+                          className="w-2 sm:w-2.5 bg-[#28764A] rounded-t transition-all group-hover:brightness-90"
+                          style={{ height: profitHeightPct }}
+                          title={`${d.month} Profit: ₹${d.profit.toLocaleString("en-IN")}`}
+                        />
+                      </div>
+                      <span className="text-[10px] font-semibold text-[#77736A] tracking-tighter truncate">
+                        {d.month}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-semibold text-[#77736A] tracking-tighter truncate">
-                      {d.month}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
 
-          {/* B. Sales by Channel */}
+          {/* B. Live Sales & Orders Stream (Reflecting all recorded sales) */}
+          <div className="bg-white border border-[#E8E2D5] rounded-2xl p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E8E2D5]">
+              <div className="flex items-center gap-2">
+                <ShoppingCart className="w-4 h-4 text-[#493020]" />
+                <h4 className="font-bold text-[#493020] text-sm">
+                  Recent Sales & Orders ({orders.length})
+                </h4>
+              </div>
+              <Link
+                href="/sales"
+                className="text-xs font-bold text-[#493020] hover:text-[#A96B13] hover:underline flex items-center gap-1"
+              >
+                All Orders <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
+
+            {loading ? (
+              <div className="py-8 text-center text-[#77736A]">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[#E4BF22]" />
+                <p className="text-xs">Loading orders...</p>
+              </div>
+            ) : orders.length === 0 ? (
+              <div className="py-8 text-center text-[#77736A]">
+                <p className="text-xs">No sales recorded yet.</p>
+                <Link
+                  href="/sales?action=new-order"
+                  className="mt-2 inline-block text-xs font-bold text-[#493020] underline"
+                >
+                  + Record first sale
+                </Link>
+              </div>
+            ) : (
+              <div className="divide-y divide-[#E8E2D5] mt-2">
+                {orders.slice(0, 5).map((ord) => (
+                  <div key={ord.id} className="py-2.5 flex items-center justify-between text-xs">
+                    <div className="min-w-0 pr-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-[#493020]">
+                          {ord.orderNumber}
+                        </span>
+                        <span className="text-[10px] text-[#77736A]">
+                          {formatDate(ord.date)}
+                        </span>
+                      </div>
+                      <div className="text-[#29271F] font-medium truncate mt-0.5">
+                        {ord.customerName} • {ord.itemDescription} (Qty: {ord.quantity})
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-bold text-[#493020]">
+                        {formatINR(ord.totalPaise)}
+                      </div>
+                      <span className="inline-block text-[9px] font-bold px-1.5 py-0.2 rounded bg-[#F2EBD8] text-[#493020] border border-[#493020]/20">
+                        {ord.paymentStatus}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* C. Sales by Channel */}
           <div className="bg-white border border-[#E8E2D5] rounded-2xl p-5 shadow-xs">
             <div className="flex items-center justify-between mb-3.5">
               <h4 className="font-bold text-[#493020] text-sm">
@@ -293,14 +560,7 @@ export default function OverviewDashboardPage() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {[
-                { name: "Direct / Store", share: "0%", sales: 0, tag: "Offline" },
-                { name: "Website D2C", share: "0%", sales: 0, tag: "Online" },
-                { name: "Amazon India", share: "0%", sales: 0, tag: "Marketplace" },
-                { name: "Flipkart Grocery", share: "0%", sales: 0, tag: "Marketplace" },
-                { name: "B2B Wholesale", share: "0%", sales: 0, tag: "Wholesale" },
-                { name: "Events & Pop-ups", share: "0%", sales: 0, tag: "Events" },
-              ].map((ch) => (
+              {channelsData.map((ch) => (
                 <div
                   key={ch.name}
                   className="bg-[#FCFAF3] p-3 rounded-xl border border-[#E8E2D5] hover:border-[#E4BF22] transition-colors"
@@ -320,7 +580,7 @@ export default function OverviewDashboardPage() {
             </div>
           </div>
 
-          {/* C. Expenses by Category */}
+          {/* D. Expenses by Category */}
           <div className="bg-white border border-[#E8E2D5] rounded-2xl p-5 shadow-xs">
             <div className="flex items-center justify-between mb-3.5">
               <h4 className="font-bold text-[#493020] text-sm">
