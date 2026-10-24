@@ -1,15 +1,15 @@
 "use client";
 
 import React, { useState } from "react";
-import { Lock, User, ShieldCheck, ArrowRight, CheckCircle2 } from "lucide-react";
+import { Lock, User, ArrowRight } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { VedroLogo } from "@/components/shared/vedro-logo";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -32,17 +32,11 @@ export default function LoginPage() {
         router.push("/");
         router.refresh();
       }
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred during sign in. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickFill = (user: string) => {
-    setUsername(user);
-    setPassword("admin123");
-    setError("");
   };
 
   return (
@@ -83,7 +77,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl pl-9 pr-3 py-2.5 text-[#29271F] focus:outline-none focus:ring-1 focus:ring-[#E4BF22] transition-colors"
-                placeholder="admin or username"
+                placeholder="Enter username or email"
                 autoComplete="username"
               />
             </div>
@@ -107,38 +101,10 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Quick Credential Badges */}
-          <div className="pt-1">
-            <span className="text-[10px] text-[#77736A] font-semibold block mb-1.5">
-              Quick Sign In:
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                { label: "Admin", user: "admin" },
-                { label: "Vineet", user: "vineet" },
-                { label: "Vivek", user: "vivek" },
-                { label: "Varunesh", user: "varunesh" },
-              ].map((btn) => (
-                <button
-                  type="button"
-                  key={btn.user}
-                  onClick={() => handleQuickFill(btn.user)}
-                  className={`px-2.5 py-1 text-[10px] font-bold rounded-lg border transition-colors ${
-                    username.toLowerCase() === btn.user
-                      ? "bg-[#E4BF22] text-[#493020] border-[#E4BF22]"
-                      : "bg-[#FCFAF3] text-[#77736A] border-[#E8E2D5] hover:text-[#493020]"
-                  }`}
-                >
-                  {btn.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] disabled:opacity-50 rounded-xl transition-all shadow-xs active:scale-[0.99]"
+            className="w-full mt-4 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] disabled:opacity-50 rounded-xl transition-all shadow-xs active:scale-[0.99]"
           >
             {loading ? (
               <span>Signing in...</span>
@@ -150,14 +116,6 @@ export default function LoginPage() {
             )}
           </button>
         </form>
-
-        <div className="mt-5 pt-3.5 border-t border-[#E8E2D5] flex items-center justify-between text-[11px] text-[#77736A]">
-          <div className="flex items-center gap-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-[#28764A]" />
-            <span>Secure Session</span>
-          </div>
-          <span className="font-mono text-[10px]">FY 2026–27</span>
-        </div>
       </div>
     </div>
   );

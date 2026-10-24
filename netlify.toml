@@ -6,4 +6,5 @@
   NODE_VERSION = "20"
   CI = "false"
   NPM_FLAGS = "--include=dev"
+  AUTH_TRUST_HOST = "true"
   SECRETS_SCAN_OMIT_KEYS = "NODE_ENV,NEXTAUTH_URL"

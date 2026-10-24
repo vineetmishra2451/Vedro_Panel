@@ -36,7 +36,11 @@ const DEFAULT_USERS = [
 ];
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  secret: process.env.NEXTAUTH_SECRET || "vedro_secret_key_production_session_secure_2026",
+  trustHost: true,
+  secret:
+    process.env.AUTH_SECRET ||
+    process.env.NEXTAUTH_SECRET ||
+    "vedro_secret_key_production_session_secure_2026",
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
