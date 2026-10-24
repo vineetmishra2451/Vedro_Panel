@@ -14,6 +14,7 @@ import {
   AlertCircle,
   X,
   CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -62,6 +63,8 @@ export default function SalesOrdersPage() {
   const [successMessage, setSuccessMessage] = useState("");
 
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form state for new offline sale
   const [formData, setFormData] = useState({
@@ -91,6 +94,25 @@ export default function SalesOrdersPage() {
         setIsModalOpen(true);
       }
     }
+
+    const loadOrders = async () => {
+      try {
+        setLoadingOrders(true);
+        const res = await fetch("/api/orders");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.orders)) {
+            setOrders(data.orders);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load orders from database:", err);
+      } finally {
+        setLoadingOrders(false);
+      }
+    };
+
+    loadOrders();
   }, []);
 
   const channels = [
@@ -101,14 +123,12 @@ export default function SalesOrdersPage() {
     { name: "B2B Wholesale", type: "B2B", status: "Active", count: 0 },
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
     const qty = parseInt(formData.quantity);
     const unitPrice = parseFloat(formData.unitPrice);
-    const discount = parseFloat(formData.discount) || 0;
-    const gstPct = parseFloat(formData.gstRate);
 
     if (isNaN(qty) || qty <= 0) {
       setFormError("Please enter a valid quantity of 1 or more.");
@@ -125,53 +145,51 @@ export default function SalesOrdersPage() {
       return;
     }
 
-    const subtotal = qty * unitPrice;
-    const taxable = Math.max(0, subtotal - discount);
-    const taxAmount = (taxable * gstPct) / 100;
-    const totalAmount = taxable + taxAmount;
+    setIsSubmitting(true);
 
-    const orderNum = `VED-OFF-${Date.now().toString().slice(-5)}`;
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
 
-    const newOrder: OrderRecord = {
-      id: `ord-${Date.now()}`,
-      orderNumber: orderNum,
-      date: formData.date,
-      customerName: formData.customerName.trim() || "Walk-in Retail Customer",
-      customerPhone: formData.customerPhone.trim() || undefined,
-      channel: "Offline / Direct Store",
-      itemDescription: formData.itemDescription.trim(),
-      quantity: qty,
-      unitPricePaise: rupeesToPaise(unitPrice),
-      subtotalPaise: rupeesToPaise(subtotal),
-      discountPaise: rupeesToPaise(discount),
-      taxPaise: rupeesToPaise(taxAmount),
-      totalPaise: rupeesToPaise(totalAmount),
-      paymentMode: formData.paymentMode,
-      paymentStatus: formData.paymentStatus,
-      fulfillmentStatus: "FULFILLED",
-      notes: formData.notes.trim() || undefined,
-    };
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to save order to database");
+      }
 
-    setOrders([newOrder, ...orders]);
-    setIsModalOpen(false);
-    setSuccessMessage(`Order ${orderNum} of ${formatINR(rupeesToPaise(totalAmount))} recorded successfully!`);
+      const data = await res.json();
+      const savedOrder: OrderRecord = data.order;
 
-    // Reset
-    setFormData({
-      date: new Date().toISOString().split("T")[0],
-      customerName: "",
-      customerPhone: "",
-      itemDescription: "",
-      quantity: "1",
-      unitPrice: "",
-      discount: "0",
-      gstRate: "5",
-      paymentMode: "UPI",
-      paymentStatus: "PAID",
-      notes: "",
-    });
+      setOrders((prev) => [savedOrder, ...prev]);
+      setIsModalOpen(false);
+      setSuccessMessage(
+        `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved to database successfully!`
+      );
 
-    setTimeout(() => setSuccessMessage(""), 5000);
+      // Reset
+      setFormData({
+        date: new Date().toISOString().split("T")[0],
+        customerName: "",
+        customerPhone: "",
+        itemDescription: "",
+        quantity: "1",
+        unitPrice: "",
+        discount: "0",
+        gstRate: "5",
+        paymentMode: "UPI",
+        paymentStatus: "PAID",
+        notes: "",
+      });
+
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Order submit error:", err);
+      setFormError(err?.message || "Could not save order to database. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -248,7 +266,12 @@ export default function SalesOrdersPage() {
 
       {activeTab === "orders" && (
         <div className="bg-white border border-[#E8E2D5] rounded-xl shadow-xs overflow-hidden">
-          {orders.length === 0 ? (
+          {loadingOrders ? (
+            <div className="p-12 text-center text-[#77736A]">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2.5 text-[#E4BF22]" />
+              <p className="text-xs font-semibold text-[#493020]">Loading orders from database...</p>
+            </div>
+          ) : orders.length === 0 ? (
             <div className="p-12 text-center text-[#77736A]">
               <ShoppingCart className="w-10 h-10 mx-auto mb-2.5 text-[#77736A]/40" />
               <h4 className="font-bold text-[#29271F] text-sm">No Orders Recorded Yet</h4>
@@ -646,9 +669,11 @@ export default function SalesOrdersPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Record Order
+                  {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSubmitting ? "Saving Order..." : "Record Order"}</span>
                 </button>
               </div>
             </form>
