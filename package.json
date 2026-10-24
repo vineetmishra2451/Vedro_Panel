@@ -12,7 +12,6 @@
     "seed": "node -r ts-node/register prisma/seed.ts"
   },
   "dependencies": {
-    "@netlify/plugin-nextjs": "^5.16.4",
     "@prisma/client": "^6.19.3",
     "@radix-ui/react-avatar": "^1.3.1",
     "@radix-ui/react-checkbox": "^1.4.1",
