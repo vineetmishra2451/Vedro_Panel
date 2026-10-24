@@ -4,11 +4,25 @@ import { auth } from "@/lib/auth";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await auth();
+    const { searchParams } = new URL(req.url);
 
-    const [dbCustomers, dbPartners] = await Promise.all([
+    // Pagination parameters: support both limit/offset and cursor pagination
+    const pageParam = parseInt(searchParams.get("page") || "1");
+    const limitParam = parseInt(searchParams.get("limit") || "100");
+    const offsetParam = searchParams.get("offset");
+    const cursor = searchParams.get("cursor");
+
+    const page = isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
+    const limit = isNaN(limitParam) || limitParam < 1 ? 50 : Math.min(limitParam, 200);
+    const skip = offsetParam !== null && !isNaN(parseInt(offsetParam))
+      ? Math.max(0, parseInt(offsetParam))
+      : (page - 1) * limit;
+
+    const [totalCount, dbCustomers, dbPartners] = await Promise.all([
+      prisma.customer.count({ where: { companyId: DEFAULT_COMPANY_ID } }),
       prisma.customer.findMany({
         where: { companyId: DEFAULT_COMPANY_ID },
         select: {
@@ -24,7 +38,8 @@ export async function GET() {
           notes: true,
         },
         orderBy: { createdAt: "desc" },
-        take: 100,
+        take: limit,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : { skip }),
       }),
       prisma.partner.findMany({
         where: { companyId: DEFAULT_COMPANY_ID, isActive: true },
@@ -53,10 +68,22 @@ export async function GET() {
     ];
 
     const partners = dbPartners.length > 0 ? dbPartners : defaultPartners;
+    const nextCursor = dbCustomers.length === limit ? dbCustomers[dbCustomers.length - 1].id : null;
+    const hasMore = cursor
+      ? dbCustomers.length === limit
+      : skip + dbCustomers.length < totalCount;
 
     return NextResponse.json({
       customers: formattedCustomers,
       partners,
+      pagination: {
+        total: totalCount,
+        page: cursor ? null : page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit),
+        hasMore,
+        nextCursor,
+      },
     });
   } catch (error) {
     console.error("Error fetching customers:", error);
@@ -98,12 +125,26 @@ export async function POST(req: Request) {
       finalSource = `Customer Referral: ${referralCustomerName || "Customer"}`;
     }
 
-    // Check if customer already exists with this phone
+    const customerSelectFields = {
+      id: true,
+      name: true,
+      phone: true,
+      email: true,
+      city: true,
+      source: true,
+      orderCount: true,
+      totalSpentPaise: true,
+      createdAt: true,
+      notes: true,
+    };
+
+    // Check if customer already exists with this phone using explicit select
     let customer = await prisma.customer.findFirst({
       where: {
         companyId: DEFAULT_COMPANY_ID,
         phone: trimmedPhone,
       },
+      select: customerSelectFields,
     });
 
     if (customer) {
@@ -116,6 +157,7 @@ export async function POST(req: Request) {
           source: finalSource || customer.source,
           notes: notes?.trim() || customer.notes,
         },
+        select: customerSelectFields,
       });
     } else {
       customer = await prisma.customer.create({
@@ -130,6 +172,7 @@ export async function POST(req: Request) {
           totalSpentPaise: 0,
           notes: notes?.trim() || null,
         },
+        select: customerSelectFields,
       });
     }
 

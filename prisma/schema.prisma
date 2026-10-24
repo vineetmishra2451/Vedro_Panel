@@ -138,6 +138,9 @@ model Company {
   adPerformanceDaily AdPerformanceDaily[]
   orderAttributions  OrderAttribution[]
 
+  @@index([name])
+  @@index([gstin])
+  @@index([createdAt])
   @@map("companies")
 }
 
@@ -154,6 +157,9 @@ model AppUser {
   memberships  CompanyMember[]
   auditLogs    AuditLog[]
 
+  @@index([name])
+  @@index([isActive])
+  @@index([createdAt])
   @@map("app_users")
 }
 
@@ -169,6 +175,10 @@ model CompanyMember {
   user      AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, userId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([role])
+  @@index([isActive])
   @@map("company_members")
 }
 
@@ -186,6 +196,11 @@ model Partner {
   capitalEntries PartnerCapital[]
 
   @@unique([companyId, name])
+  @@index([companyId])
+  @@index([name])
+  @@index([email])
+  @@index([phone])
+  @@index([isActive])
   @@map("partners")
 }
 
@@ -212,6 +227,13 @@ model PartnerCapital {
 
   @@index([companyId, partnerId])
   @@index([companyId, date])
+  @@index([companyId])
+  @@index([partnerId])
+  @@index([date])
+  @@index([type])
+  @@index([amountPaise])
+  @@index([createdBy])
+  @@index([createdAt])
   @@map("partner_capitals")
 }
 
@@ -234,6 +256,12 @@ model Account {
   payments    Payment[]
 
   @@unique([companyId, code])
+  @@index([companyId])
+  @@index([code])
+  @@index([name])
+  @@index([type])
+  @@index([parentId])
+  @@index([isActive])
   @@map("accounts")
 }
 
@@ -265,6 +293,12 @@ model Transaction {
 
   @@index([companyId, date])
   @@index([companyId, status])
+  @@index([companyId])
+  @@index([date])
+  @@index([status])
+  @@index([reference])
+  @@index([createdBy])
+  @@index([createdAt])
   @@map("transactions")
 }
 
@@ -281,6 +315,10 @@ model TransactionLine {
   account       Account     @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
   @@index([transactionId])
+  @@index([accountId])
+  @@index([type])
+  @@index([amountPaise])
+  @@index([createdAt])
   @@map("transaction_lines")
 }
 
@@ -304,6 +342,13 @@ model Party {
   assets    Asset[]
 
   @@index([companyId, type])
+  @@index([companyId])
+  @@index([name])
+  @@index([type])
+  @@index([gstin])
+  @@index([phone])
+  @@index([email])
+  @@index([isActive])
   @@map("parties")
 }
 
@@ -329,6 +374,15 @@ model Payment {
   allocations   PaymentAllocation[]
 
   @@index([companyId, date])
+  @@index([companyId])
+  @@index([date])
+  @@index([partyId])
+  @@index([accountId])
+  @@index([type])
+  @@index([method])
+  @@index([reference])
+  @@index([createdBy])
+  @@index([createdAt])
   @@map("payments")
 }
 
@@ -344,6 +398,9 @@ model PaymentAllocation {
   transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   order         Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
+  @@index([paymentId])
+  @@index([transactionId])
+  @@index([orderId])
   @@map("payment_allocations")
 }
 
@@ -366,6 +423,10 @@ model TaxCode {
   products      Product[]
 
   @@unique([companyId, name, effectiveFrom])
+  @@index([companyId])
+  @@index([name])
+  @@index([hsnSac])
+  @@index([isActive])
   @@map("tax_codes")
 }
 
@@ -382,6 +443,8 @@ model ProductCategory {
   products  Product[]
 
   @@unique([companyId, name])
+  @@index([companyId])
+  @@index([parentId])
   @@map("product_categories")
 }
 
@@ -410,6 +473,13 @@ model Product {
   inventoryMovements InventoryMovement[]
 
   @@unique([companyId, sku])
+  @@index([companyId])
+  @@index([sku])
+  @@index([name])
+  @@index([categoryId])
+  @@index([taxCodeId])
+  @@index([isActive])
+  @@index([createdAt])
   @@map("products")
 }
 
@@ -424,6 +494,9 @@ model SalesChannel {
   orders    Order[]
 
   @@unique([companyId, name])
+  @@index([companyId])
+  @@index([name])
+  @@index([isActive])
   @@map("sales_channels")
 }
 
@@ -450,6 +523,16 @@ model Customer {
 
   @@index([companyId, phone])
   @@index([companyId, email])
+  @@index([companyId])
+  @@index([name])
+  @@index([phone])
+  @@index([email])
+  @@index([city])
+  @@index([source])
+  @@index([orderCount])
+  @@index([totalSpentPaise])
+  @@index([createdAt])
+  @@index([lastPurchaseAt])
   @@map("customers")
 }
 
@@ -483,6 +566,15 @@ model Order {
   @@unique([companyId, orderNumber])
   @@index([companyId, date])
   @@index([companyId, status])
+  @@index([companyId])
+  @@index([orderNumber])
+  @@index([channelId])
+  @@index([customerId])
+  @@index([date])
+  @@index([status])
+  @@index([totalPaise])
+  @@index([createdBy])
+  @@index([createdAt])
   @@map("orders")
 }
 
@@ -507,6 +599,9 @@ model OrderLine {
   product            Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
   returnLines        ReturnLine[]
 
+  @@index([orderId])
+  @@index([productId])
+  @@index([createdAt])
   @@map("order_lines")
 }
 
@@ -530,6 +625,12 @@ model Return {
   order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   lines             ReturnLine[]
 
+  @@index([companyId])
+  @@index([orderId])
+  @@index([date])
+  @@index([status])
+  @@index([createdBy])
+  @@index([createdAt])
   @@map("returns")
 }
 
@@ -545,6 +646,8 @@ model ReturnLine {
   return       Return    @relation(fields: [returnId], references: [id], onDelete: Cascade)
   orderLine    OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
 
+  @@index([returnId])
+  @@index([orderLineId])
   @@map("return_lines")
 }
 
@@ -560,6 +663,9 @@ model InventoryLocation {
   movements InventoryMovement[]
 
   @@unique([companyId, name])
+  @@index([companyId])
+  @@index([name])
+  @@index([isActive])
   @@map("inventory_locations")
 }
 
@@ -587,6 +693,12 @@ model InventoryMovement {
 
   @@index([companyId, productId])
   @@index([companyId, type])
+  @@index([companyId])
+  @@index([productId])
+  @@index([locationId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
   @@map("inventory_movements")
 }
 
@@ -618,6 +730,13 @@ model Asset {
   depreciationEntries   DepreciationEntry[]
 
   @@index([companyId, status])
+  @@index([companyId])
+  @@index([name])
+  @@index([category])
+  @@index([supplierId])
+  @@index([status])
+  @@index([purchaseDate])
+  @@index([createdAt])
   @@map("assets")
 }
 
@@ -634,6 +753,9 @@ model AssetEvent {
 
   asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
+  @@index([assetId])
+  @@index([date])
+  @@index([type])
   @@map("asset_events")
 }
 
@@ -652,6 +774,9 @@ model DepreciationEntry {
   asset            Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@index([assetId, periodStart])
+  @@index([companyId])
+  @@index([assetId])
+  @@index([periodStart])
   @@map("depreciation_entries")
 }
 
@@ -669,6 +794,9 @@ model AdAccount {
   campaigns   Campaign[]
 
   @@unique([companyId, platform, externalId])
+  @@index([companyId])
+  @@index([platform])
+  @@index([isActive])
   @@map("ad_accounts")
 }
 
@@ -690,6 +818,10 @@ model Campaign {
   attributions OrderAttribution[]
 
   @@index([companyId])
+  @@index([adAccountId])
+  @@index([name])
+  @@index([status])
+  @@index([startDate])
   @@map("campaigns")
 }
 
@@ -709,6 +841,9 @@ model AdPerformanceDaily {
   campaign             Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@unique([campaignId, date])
+  @@index([companyId])
+  @@index([campaignId])
+  @@index([date])
   @@map("ad_performance_daily")
 }
 
@@ -726,6 +861,9 @@ model OrderAttribution {
   order                 Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   campaign              Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
+  @@index([companyId])
+  @@index([orderId])
+  @@index([campaignId])
   @@map("order_attributions")
 }
 
@@ -751,6 +889,10 @@ model ImportJob {
   rows          ImportRow[]
 
   @@index([companyId, status])
+  @@index([companyId])
+  @@index([status])
+  @@index([entityType])
+  @@index([createdAt])
   @@map("import_jobs")
 }
 
@@ -768,6 +910,9 @@ model ImportRow {
   importJob        ImportJob       @relation(fields: [importJobId], references: [id], onDelete: Cascade)
 
   @@index([importJobId, status])
+  @@index([importJobId])
+  @@index([status])
+  @@index([rowNumber])
   @@map("import_rows")
 }
 
@@ -788,6 +933,9 @@ model ForecastScenario {
   months        ForecastMonth[]
 
   @@index([companyId])
+  @@index([name])
+  @@index([type])
+  @@index([isActive])
   @@map("forecast_scenarios")
 }
 
@@ -811,6 +959,8 @@ model ForecastMonth {
   scenario           ForecastScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 
   @@unique([scenarioId, month])
+  @@index([scenarioId])
+  @@index([month])
   @@map("forecast_months")
 }
 
@@ -831,5 +981,11 @@ model AuditLog {
 
   @@index([companyId, entity, entityId])
   @@index([companyId, createdAt])
+  @@index([companyId])
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
   @@map("audit_logs")
 }

@@ -21,6 +21,7 @@ import {
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { formatINR, formatDate, rupeesToPaise } from "@/lib/format";
+import { getCachedData, setCachedData } from "@/lib/cache";
 
 interface OrderRecord {
   id: string;
@@ -115,17 +116,36 @@ export default function SalesOrdersPage() {
   const liveTotalPaise = liveTaxablePaise + liveTaxPaise;
 
   const loadData = async () => {
+    // 1. Immediately hydrate from cache for zero-delay UI rendering
+    const cachedOrders = getCachedData<OrderRecord[]>("orders");
+    const cachedCust = getCachedData<CustomerRecord[]>("customers");
+    const cachedPart = getCachedData<PartnerRecord[]>("partners");
+
+    if (cachedOrders && Array.isArray(cachedOrders) && cachedOrders.length > 0) {
+      setOrders(cachedOrders);
+      setLoadingOrders(false);
+    }
+    if (cachedCust && Array.isArray(cachedCust) && cachedCust.length > 0) {
+      setCustomerList(cachedCust);
+    }
+    if (cachedPart && Array.isArray(cachedPart) && cachedPart.length > 0) {
+      setPartnersList(cachedPart);
+    }
+
     try {
-      setLoadingOrders(true);
+      if (!cachedOrders || cachedOrders.length === 0) {
+        setLoadingOrders(true);
+      }
       const [resOrders, resCust] = await Promise.all([
-        fetch("/api/orders"),
-        fetch("/api/customers"),
+        fetch("/api/orders?limit=100"),
+        fetch("/api/customers?limit=100"),
       ]);
 
       if (resOrders.ok) {
         const data = await resOrders.json();
         if (Array.isArray(data.orders)) {
           setOrders(data.orders);
+          setCachedData("orders", data.orders);
         }
       }
 
@@ -133,9 +153,11 @@ export default function SalesOrdersPage() {
         const cData = await resCust.json();
         if (Array.isArray(cData.customers)) {
           setCustomerList(cData.customers);
+          setCachedData("customers", cData.customers);
         }
         if (Array.isArray(cData.partners) && cData.partners.length > 0) {
           setPartnersList(cData.partners);
+          setCachedData("partners", cData.partners);
         }
       }
     } catch (err) {
@@ -277,7 +299,11 @@ export default function SalesOrdersPage() {
         throw new Error(err.error || "Failed to delete order");
       }
 
-      setOrders((prev) => prev.filter((o) => o.id !== order.id));
+      setOrders((prev) => {
+        const updated = prev.filter((o) => o.id !== order.id);
+        setCachedData("orders", updated);
+        return updated;
+      });
       if (selectedDrawerOrder?.id === order.id) {
         setSelectedDrawerOrder(null);
       }
@@ -355,13 +381,21 @@ export default function SalesOrdersPage() {
       };
 
       if (isEditing) {
-        setOrders((prev) => prev.map((o) => (o.id === savedOrder.id ? savedOrder : o)));
+        setOrders((prev) => {
+          const updated = prev.map((o) => (o.id === savedOrder.id ? savedOrder : o));
+          setCachedData("orders", updated);
+          return updated;
+        });
         if (selectedDrawerOrder?.id === savedOrder.id) {
           setSelectedDrawerOrder(savedOrder);
         }
         setSuccessMessage(`Order ${savedOrder.orderNumber} updated successfully with ${gstPct}% GST!`);
       } else {
-        setOrders((prev) => [savedOrder, ...prev]);
+        setOrders((prev) => {
+          const updated = [savedOrder, ...prev];
+          setCachedData("orders", updated);
+          return updated;
+        });
         setSuccessMessage(
           `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved successfully!`
         );
@@ -370,10 +404,13 @@ export default function SalesOrdersPage() {
       setIsModalOpen(false);
 
       // Refresh customer list if added to contacts
-      fetch("/api/customers")
+      fetch("/api/customers?limit=100")
         .then((r) => r.json())
         .then((cData) => {
-          if (Array.isArray(cData.customers)) setCustomerList(cData.customers);
+          if (Array.isArray(cData.customers)) {
+            setCustomerList(cData.customers);
+            setCachedData("customers", cData.customers);
+          }
         })
         .catch(() => {});
 

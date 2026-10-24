@@ -22,6 +22,7 @@ import { KpiCard } from "@/components/shared/kpi-card";
 import { GlobalFilters } from "@/components/layout/global-filters";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { formatINR, formatDate } from "@/lib/format";
+import { getCachedData, setCachedData } from "@/lib/cache";
 
 interface OrderRecord {
   id: string;
@@ -59,14 +60,25 @@ export default function OverviewDashboardPage() {
   );
 
   useEffect(() => {
+    // 1. Immediately hydrate from cached data if available (zero loading delay)
+    const cachedOrders = getCachedData<OrderRecord[]>("orders");
+    if (cachedOrders && Array.isArray(cachedOrders) && cachedOrders.length > 0) {
+      setOrders(cachedOrders);
+      setLoading(false);
+    }
+
+    // 2. Refresh in the background (stale-while-revalidate)
     const fetchDashboardOrders = async () => {
       try {
-        setLoading(true);
-        const res = await fetch("/api/orders");
+        if (!cachedOrders || cachedOrders.length === 0) {
+          setLoading(true);
+        }
+        const res = await fetch("/api/orders?limit=100");
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.orders)) {
             setOrders(data.orders);
+            setCachedData("orders", data.orders);
           }
         }
       } catch (err) {

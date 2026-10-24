@@ -19,6 +19,7 @@ import {
 import { KpiCard } from "@/components/shared/kpi-card";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { formatDate, formatINR } from "@/lib/format";
+import { getCachedData, setCachedData } from "@/lib/cache";
 
 interface CustomerRecord {
   id: string;
@@ -68,16 +69,32 @@ export default function CustomersPage() {
   const [formError, setFormError] = useState("");
 
   const fetchCustomers = async () => {
+    // 1. Immediately hydrate from cache for zero-delay UI rendering
+    const cachedCustomers = getCachedData<CustomerRecord[]>("customers");
+    const cachedPartners = getCachedData<PartnerRecord[]>("partners");
+
+    if (cachedCustomers && Array.isArray(cachedCustomers) && cachedCustomers.length > 0) {
+      setCustomers(cachedCustomers);
+      setLoading(false);
+    }
+    if (cachedPartners && Array.isArray(cachedPartners) && cachedPartners.length > 0) {
+      setPartners(cachedPartners);
+    }
+
     try {
-      setLoading(true);
-      const res = await fetch("/api/customers");
+      if (!cachedCustomers || cachedCustomers.length === 0) {
+        setLoading(true);
+      }
+      const res = await fetch("/api/customers?limit=100");
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.customers)) {
           setCustomers(data.customers);
+          setCachedData("customers", data.customers);
         }
         if (Array.isArray(data.partners) && data.partners.length > 0) {
           setPartners(data.partners);
+          setCachedData("partners", data.partners);
         }
       }
     } catch (err) {
@@ -135,10 +152,14 @@ export default function CustomersPage() {
       const data = await res.json();
       const savedCustomer: CustomerRecord = data.customer;
 
-      setCustomers((prev) => [
-        savedCustomer,
-        ...prev.filter((c) => c.id !== savedCustomer.id && c.phone !== savedCustomer.phone),
-      ]);
+      setCustomers((prev) => {
+        const updated = [
+          savedCustomer,
+          ...prev.filter((c) => c.id !== savedCustomer.id && c.phone !== savedCustomer.phone),
+        ];
+        setCachedData("customers", updated);
+        return updated;
+      });
       setIsModalOpen(false);
       setSuccessMessage(`Customer "${savedCustomer.name}" saved to directory successfully!`);
 

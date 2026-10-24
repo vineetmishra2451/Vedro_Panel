@@ -4,37 +4,56 @@ import { auth } from "@/lib/auth";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await auth();
+    const { searchParams } = new URL(req.url);
 
-    // Direct fetch using primary company ID to eliminate unnecessary round-trips
-    const dbOrders = await prisma.order.findMany({
-      where: { companyId: DEFAULT_COMPANY_ID },
-      select: {
-        id: true,
-        orderNumber: true,
-        date: true,
-        status: true,
-        subtotalPaise: true,
-        discountPaise: true,
-        taxPaise: true,
-        totalPaise: true,
-        notes: true,
-        channel: { select: { name: true } },
-        customer: { select: { name: true, phone: true } },
-        lines: {
-          select: {
-            quantity: true,
-            unitPricePaise: true,
-            totalPaise: true,
-            product: { select: { name: true, sku: true } },
+    // Pagination parameters: support both limit/offset and cursor pagination
+    const pageParam = parseInt(searchParams.get("page") || "1");
+    const limitParam = parseInt(searchParams.get("limit") || "100");
+    const offsetParam = searchParams.get("offset");
+    const cursor = searchParams.get("cursor");
+
+    const page = isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
+    const limit = isNaN(limitParam) || limitParam < 1 ? 50 : Math.min(limitParam, 200);
+    const skip = offsetParam !== null && !isNaN(parseInt(offsetParam))
+      ? Math.max(0, parseInt(offsetParam))
+      : (page - 1) * limit;
+
+    // Batch execute total count and selective query in parallel
+    const [totalCount, dbOrders] = await Promise.all([
+      prisma.order.count({ where: { companyId: DEFAULT_COMPANY_ID } }),
+      prisma.order.findMany({
+        where: { companyId: DEFAULT_COMPANY_ID },
+        select: {
+          id: true,
+          orderNumber: true,
+          date: true,
+          status: true,
+          subtotalPaise: true,
+          discountPaise: true,
+          taxPaise: true,
+          totalPaise: true,
+          notes: true,
+          channel: { select: { name: true } },
+          customer: { select: { name: true, phone: true } },
+          lines: {
+            select: {
+              quantity: true,
+              unitPricePaise: true,
+              totalPaise: true,
+              product: { select: { name: true, sku: true } },
+            },
           },
         },
-      },
-      orderBy: { date: "desc" },
-      take: 100,
-    });
+        orderBy: { date: "desc" },
+        take: limit,
+        ...(cursor
+          ? { cursor: { id: cursor }, skip: 1 }
+          : { skip }),
+      }),
+    ]);
 
     const formattedOrders = dbOrders.map((order) => {
       const primaryLine = order.lines[0];
@@ -73,7 +92,22 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ orders: formattedOrders });
+    const nextCursor = dbOrders.length === limit ? dbOrders[dbOrders.length - 1].id : null;
+    const hasMore = cursor
+      ? dbOrders.length === limit
+      : skip + dbOrders.length < totalCount;
+
+    return NextResponse.json({
+      orders: formattedOrders,
+      pagination: {
+        total: totalCount,
+        page: cursor ? null : page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit),
+        hasMore,
+        nextCursor,
+      },
+    });
   } catch (error) {
     console.error("Error fetching orders:", error);
     return NextResponse.json({ error: "Failed to fetch orders" }, { status: 500 });
@@ -431,6 +465,7 @@ export async function PUT(req: Request) {
               }
             : {}),
         },
+        select: { id: true },
       }),
     ]);
 
@@ -508,7 +543,7 @@ export async function DELETE(req: Request) {
     // Delete lines & order in a transaction
     await prisma.$transaction([
       prisma.orderLine.deleteMany({ where: { orderId: id } }),
-      prisma.order.delete({ where: { id } }),
+      prisma.order.delete({ where: { id }, select: { id: true } }),
     ]);
 
     return NextResponse.json({ success: true, deletedId: id });

@@ -27,6 +27,9 @@ export async function logAudit(params: LogAuditParams) {
         after: params.after ? JSON.parse(JSON.stringify(params.after)) : undefined,
         ipAddress: params.ipAddress,
       },
+      select: {
+        id: true,
+      },
     });
   } catch (error) {
     console.error("Failed to write audit log:", error);

@@ -88,11 +88,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 { email: `${idInput}@vedrolife.com` },
               ],
             },
-            include: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              passwordHash: true,
+              isActive: true,
               memberships: {
-                include: {
-                  company: true,
+                where: { isActive: true },
+                select: {
+                  role: true,
+                  companyId: true,
                 },
+                take: 1,
               },
             },
           });

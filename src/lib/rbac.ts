@@ -73,6 +73,10 @@ export async function verifyUserPermission(
         userId,
       },
     },
+    select: {
+      role: true,
+      isActive: true,
+    },
   });
 
   if (!membership || !membership.isActive) {
