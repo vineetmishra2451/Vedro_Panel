@@ -15,10 +15,31 @@ import {
   ShieldCheck,
   LogOut,
 } from "lucide-react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 
 export function Header() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+
+  const user = session?.user;
+  const displayName = user?.name || user?.email?.split("@")[0] || "User";
+  const userRole = String((user as any)?.role || "PARTNER").toUpperCase();
+
+  const displayRole =
+    userRole === "ADMIN"
+      ? "Administrator"
+      : userRole === "PARTNER"
+      ? "Partner • Co-Founder"
+      : userRole.charAt(0) + userRole.slice(1).toLowerCase();
+
+  const initials =
+    displayName
+      .split(" ")
+      .filter(Boolean)
+      .map((part: string) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "U";
 
   // Determine current page section title
   const getPageInfo = () => {
@@ -104,14 +125,14 @@ export function Header() {
         {/* User Pill */}
         <div className="flex items-center gap-2 pl-0.5 sm:pl-1 cursor-pointer group">
           <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#493020] text-[#E4BF22] flex items-center justify-center font-bold text-xs shadow-xs group-hover:scale-105 transition-transform">
-            VM
+            {initials}
           </div>
           <div className="text-left hidden lg:block">
             <div className="text-xs font-bold text-[#493020] leading-none">
-              Vineet Mishra
+              {displayName}
             </div>
             <div className="text-[10px] text-[#77736A] mt-0.5 font-medium">
-              Partner • Finance Admin
+              {displayRole}
             </div>
           </div>
         </div>
