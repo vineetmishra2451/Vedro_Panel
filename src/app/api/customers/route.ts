@@ -2,21 +2,32 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 
+const DEFAULT_COMPANY_ID = "vedro-company-main";
+
 export async function GET() {
   try {
     const session = await auth();
-    const company = await prisma.company.findFirst();
-    if (!company) {
-      return NextResponse.json({ customers: [], partners: [] });
-    }
 
     const [dbCustomers, dbPartners] = await Promise.all([
       prisma.customer.findMany({
-        where: { companyId: company.id },
+        where: { companyId: DEFAULT_COMPANY_ID },
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          city: true,
+          source: true,
+          orderCount: true,
+          totalSpentPaise: true,
+          createdAt: true,
+          notes: true,
+        },
         orderBy: { createdAt: "desc" },
+        take: 100,
       }),
       prisma.partner.findMany({
-        where: { companyId: company.id, isActive: true },
+        where: { companyId: DEFAULT_COMPANY_ID, isActive: true },
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       }),
@@ -58,11 +69,6 @@ export async function POST(req: Request) {
     const session = await auth();
     const body = await req.json();
 
-    const company = await prisma.company.findFirst();
-    if (!company) {
-      return NextResponse.json({ error: "Company record not found" }, { status: 400 });
-    }
-
     const {
       name,
       phone,
@@ -95,7 +101,7 @@ export async function POST(req: Request) {
     // Check if customer already exists with this phone
     let customer = await prisma.customer.findFirst({
       where: {
-        companyId: company.id,
+        companyId: DEFAULT_COMPANY_ID,
         phone: trimmedPhone,
       },
     });
@@ -114,7 +120,7 @@ export async function POST(req: Request) {
     } else {
       customer = await prisma.customer.create({
         data: {
-          companyId: company.id,
+          companyId: DEFAULT_COMPANY_ID,
           name: trimmedName,
           phone: trimmedPhone,
           email: email?.trim() || null,

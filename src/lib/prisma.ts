@@ -7,7 +7,9 @@ const globalForPrisma = globalThis as unknown as {
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+    log: ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+// Always cache prisma client on globalThis across all environments (including serverless Netlify warm lambdas)
+// to reuse connection pools and avoid repeated TLS/SSL handshakes
+globalForPrisma.prisma = prisma;

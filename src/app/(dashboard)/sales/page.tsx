@@ -39,6 +39,7 @@ interface OrderRecord {
   paymentMode: string;
   paymentStatus: "PAID" | "PENDING";
   fulfillmentStatus: "FULFILLED" | "CONFIRMED";
+  gstRate?: number;
   notes?: string;
 }
 
@@ -101,6 +102,17 @@ export default function SalesOrdersPage() {
   });
 
   const [formError, setFormError] = useState("");
+
+  // Live real-time calculation for modal preview
+  const liveQty = parseInt(formData.quantity) || 1;
+  const liveUnitPrice = parseFloat(formData.unitPrice) || 0;
+  const liveDiscount = parseFloat(formData.discount) || 0;
+  const liveGstPct = isNaN(parseFloat(formData.gstRate)) ? 5 : parseFloat(formData.gstRate);
+  const liveSubtotalPaise = Math.round(liveQty * liveUnitPrice * 100);
+  const liveDiscountPaise = Math.round(liveDiscount * 100);
+  const liveTaxablePaise = Math.max(0, liveSubtotalPaise - liveDiscountPaise);
+  const liveTaxPaise = Math.round((liveTaxablePaise * liveGstPct) / 100);
+  const liveTotalPaise = liveTaxablePaise + liveTaxPaise;
 
   const loadData = async () => {
     try {
@@ -190,6 +202,15 @@ export default function SalesOrdersPage() {
     setSaveToContacts(true);
     setFormError("");
 
+    // Calculate existing order GST rate accurately
+    const taxablePaise = Math.max(0, order.subtotalPaise - order.discountPaise);
+    const existingGst =
+      order.gstRate !== undefined
+        ? order.gstRate
+        : taxablePaise > 0
+        ? Math.round((order.taxPaise * 100) / taxablePaise)
+        : 5;
+
     // Parse referral from notes if present
     let cleanedNotes = order.notes || "";
     let refOpt: "NONE" | "PARTNER" | "CUSTOMER" = "NONE";
@@ -225,7 +246,7 @@ export default function SalesOrdersPage() {
       quantity: order.quantity.toString(),
       unitPrice: (order.unitPricePaise / 100).toString(),
       discount: (order.discountPaise / 100).toString(),
-      gstRate: "5",
+      gstRate: existingGst.toString(),
       paymentMode: order.paymentMode.includes("CASH")
         ? "CASH"
         : order.paymentMode.includes("CARD")
@@ -295,6 +316,9 @@ export default function SalesOrdersPage() {
       return;
     }
 
+    const parsedGst = parseFloat(formData.gstRate);
+    const gstPct = isNaN(parsedGst) ? 5 : parsedGst;
+
     setIsSubmitting(true);
 
     try {
@@ -305,6 +329,7 @@ export default function SalesOrdersPage() {
       const payload = {
         ...(isEditing ? { id: editingOrderId } : {}),
         ...formData,
+        gstRate: gstPct.toString(),
         saveToContacts,
         referralType: referralOption,
         referralPartner: referralOption === "PARTNER" ? referralPartner : undefined,
@@ -324,14 +349,17 @@ export default function SalesOrdersPage() {
       }
 
       const data = await res.json();
-      const savedOrder: OrderRecord = data.order;
+      const savedOrder: OrderRecord = {
+        ...data.order,
+        gstRate: gstPct,
+      };
 
       if (isEditing) {
         setOrders((prev) => prev.map((o) => (o.id === savedOrder.id ? savedOrder : o)));
         if (selectedDrawerOrder?.id === savedOrder.id) {
           setSelectedDrawerOrder(savedOrder);
         }
-        setSuccessMessage(`Order ${savedOrder.orderNumber} updated successfully!`);
+        setSuccessMessage(`Order ${savedOrder.orderNumber} updated successfully with ${gstPct}% GST!`);
       } else {
         setOrders((prev) => [savedOrder, ...prev]);
         setSuccessMessage(
@@ -565,7 +593,12 @@ export default function SalesOrdersPage() {
                         <td className="px-5 py-3 font-medium">
                           <div>{ord.itemDescription}</div>
                           <div className="text-[10px] text-[#77736A]">
-                            Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)}
+                            Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)}{" "}
+                            {ord.gstRate !== undefined && (
+                              <span className="font-semibold text-[#493020]">
+                                • {ord.gstRate}% GST
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-5 py-3">
@@ -844,17 +877,18 @@ export default function SalesOrdersPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
-                    GST Rate
+                    GST Rate *
                   </label>
                   <select
                     value={formData.gstRate}
                     onChange={(e) => setFormData({ ...formData, gstRate: e.target.value })}
-                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
                   >
-                    <option value="0">0% (Exempt)</option>
-                    <option value="5">5% (Packaged Food)</option>
-                    <option value="12">12% (Processed Food)</option>
-                    <option value="18">18% (Standard / Services)</option>
+                    <option value="0">0% (Exempt / Nil Rated)</option>
+                    <option value="5">5% (Packaged Food & Cold-Pressed Oils)</option>
+                    <option value="12">12% (Processed Food & Pure Desi Cow Ghee)</option>
+                    <option value="18">18% (Standard Rate / Services)</option>
+                    <option value="28">28% (Luxury / Specific Goods)</option>
                   </select>
                 </div>
 
@@ -872,6 +906,32 @@ export default function SalesOrdersPage() {
                     <option value="CARD">Debit / Credit Card</option>
                     <option value="BANK_TRANSFER">Direct Bank Transfer</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Live Price & Tax Breakdown Preview */}
+              <div className="bg-[#FCFAF3] p-3 rounded-xl border border-[#E8E2D5] space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[#77736A]">Taxable Subtotal:</span>
+                  <span className="font-mono font-semibold text-[#29271F]">
+                    {formatINR(liveTaxablePaise)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[#77736A]">
+                    GST Output Tax ({liveGstPct}%):
+                  </span>
+                  <span className="font-mono font-bold text-[#493020]">
+                    +{formatINR(liveTaxPaise)}
+                  </span>
+                </div>
+                <div className="pt-1.5 border-t border-[#E8E2D5] flex items-center justify-between text-xs">
+                  <span className="font-bold text-[#29271F]">
+                    Calculated Total Value:
+                  </span>
+                  <span className="font-mono font-bold text-sm text-[#493020]">
+                    {formatINR(liveTotalPaise)}
+                  </span>
                 </div>
               </div>
 
@@ -1070,7 +1130,7 @@ export default function SalesOrdersPage() {
                   </div>
                   <div>
                     <span className="text-[#77736A] block text-[10px] font-bold uppercase">
-                      GST Tax
+                      GST Tax ({selectedDrawerOrder.gstRate !== undefined ? `${selectedDrawerOrder.gstRate}%` : "5%"})
                     </span>
                     <span className="font-mono text-[#493020] font-bold">
                       {formatINR(selectedDrawerOrder.taxPaise)}
