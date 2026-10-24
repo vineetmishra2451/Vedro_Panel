@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Vedro Brand Identity Palette */
+    --vedro-mustard: #E4BF22;
+    --vedro-mustard-hover: #cfac18;
+    --vedro-mustard-light: #FDF8E2;
+    --vedro-mustard-subtle: #FAF2CE;
+    
+    --vedro-brown: #493020;
+    --vedro-brown-hover: #3b2619;
+    --vedro-brown-dark: #2F1E14;
+    --vedro-brown-light: #6B4E38;
+    
+    --vedro-ivory: #FCFAF3;
+    --vedro-white: #FFFFFF;
+    --vedro-sand: #F2EBD8;
+    --vedro-sand-hover: #E8DFC7;
+    --vedro-sand-subtle: #F9F6EE;
+    
+    --vedro-olive: #7D8654;
+    --vedro-olive-light: #EFF2E6;
+    --vedro-olive-dark: #626A3E;
+    
+    --vedro-text: #29271F;
+    --vedro-text-muted: #77736A;
+    --vedro-text-subtle: #969186;
+    
+    --vedro-border: #E8E2D5;
+    --vedro-border-subtle: #F3EFE7;
+    --vedro-border-focus: #E4BF22;
+    
+    /* Semantic Status Tokens */
+    --vedro-success: #28764A;
+    --vedro-success-bg: #EAF4EE;
+    --vedro-success-border: #BCDDCB;
+    
+    --vedro-warning: #A96B13;
+    --vedro-warning-bg: #FCF4E8;
+    --vedro-warning-border: #F3DBB6;
+    
+    --vedro-error: #B83C32;
+    --vedro-error-bg: #FBECEB;
+    --vedro-error-border: #F4C4C0;
+  }
+
+  body {
+    background-color: var(--vedro-ivory);
+    color: var(--vedro-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    selection-background-color: var(--vedro-mustard);
+    selection-color: var(--vedro-brown);
+  }
+
+  /* Ensure tabular numbers for accounting clarity */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom Design System Components */
+.card-vedro {
+  background-color: #FFFFFF;
+  border: 1px solid #E8E2D5;
+  border-radius: 1.125rem; /* ~18px */
+  padding: 1.375rem;
+  box-shadow: 0 1px 2px 0 rgba(73, 48, 32, 0.03);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card-vedro:hover {
+  border-color: #D6CEBE;
+}
+
+/* Premium Vedro Buttons */
+.btn-vedro-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: #E4BF22;
+  color: #493020;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(228, 191, 34, 0.2);
+}
+
+.btn-vedro-primary:hover {
+  background-color: #cfac18;
+  box-shadow: 0 2px 4px rgba(228, 191, 34, 0.3);
+}
+
+.btn-vedro-primary:active {
+  transform: scale(0.99);
+}
+
+.btn-vedro-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: #FFFFFF;
+  color: #29271F;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  border: 1px solid #E8E2D5;
+  transition: all 0.15s ease;
+}
+
+.btn-vedro-secondary:hover {
+  background-color: #F2EBD8;
+  border-color: #D6CEBE;
+}
+
+.btn-vedro-dark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: #493020;
+  color: #FFFFFF;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  transition: all 0.15s ease;
+}
+
+.btn-vedro-dark:hover {
+  background-color: #3b2619;
+}

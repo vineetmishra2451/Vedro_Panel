@@ -1,0 +1,15 @@
+# Local development PostgreSQL
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: vedro
+      POSTGRES_USER: vedro
+      POSTGRES_PASSWORD: vedro_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

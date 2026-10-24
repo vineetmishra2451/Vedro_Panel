@@ -1,0 +1,135 @@
+import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
+import { prisma } from "@/lib/prisma";
+
+// Preconfigured partner and admin credentials
+const DEFAULT_USERS = [
+  {
+    username: "admin",
+    email: "admin@vedro.com",
+    name: "Admin",
+    role: "ADMIN",
+    password: process.env.ADMIN_PASSWORD || "admin123",
+  },
+  {
+    username: "vineet",
+    email: "vineet@vedrolife.com",
+    name: "Vineet Mishra",
+    role: "PARTNER",
+    password: process.env.ADMIN_PASSWORD || "admin123",
+  },
+  {
+    username: "vivek",
+    email: "vivek@vedrolife.com",
+    name: "Vivek",
+    role: "PARTNER",
+    password: process.env.ADMIN_PASSWORD || "admin123",
+  },
+  {
+    username: "varunesh",
+    email: "varunesh@vedrolife.com",
+    name: "Varunesh",
+    role: "PARTNER",
+    password: process.env.ADMIN_PASSWORD || "admin123",
+  },
+];
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  secret: process.env.NEXTAUTH_SECRET || "vedro_secret_key_production_session_secure_2026",
+  session: { strategy: "jwt" },
+  pages: {
+    signIn: "/login",
+  },
+  providers: [
+    Credentials({
+      name: "Credentials",
+      credentials: {
+        username: { label: "Username", type: "text" },
+        email: { label: "Email", type: "text" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials) return null;
+        const username = typeof credentials.username === "string" ? credentials.username : "";
+        const email = typeof credentials.email === "string" ? credentials.email : "";
+        const password = typeof credentials.password === "string" ? credentials.password : "";
+
+        if ((!username && !email) || !password) return null;
+
+        const idInput = (username || email).toLowerCase().trim();
+
+        // 1. Check default credentials
+        const defaultUser = DEFAULT_USERS.find(
+          (u) => u.username.toLowerCase() === idInput || u.email.toLowerCase() === idInput
+        );
+
+        if (defaultUser && password === defaultUser.password) {
+          return {
+            id: `usr-${defaultUser.username}`,
+            name: defaultUser.name,
+            email: defaultUser.email,
+            role: defaultUser.role,
+            companyId: "vedro-fmcg",
+          };
+        }
+
+        // 2. Query database for AppUser records
+        try {
+          const user = await prisma.appUser.findFirst({
+            where: {
+              OR: [
+                { email: idInput },
+                { email: `${idInput}@vedro.com` },
+                { email: `${idInput}@vedrolife.com` },
+              ],
+            },
+            include: {
+              memberships: {
+                include: {
+                  company: true,
+                },
+              },
+            },
+          });
+
+          if (user && user.isActive && user.passwordHash) {
+            const isValid = await bcrypt.compare(password, user.passwordHash);
+            if (isValid) {
+              const primaryMembership = user.memberships[0];
+              return {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: primaryMembership?.role || "PARTNER",
+                companyId: primaryMembership?.companyId || null,
+              };
+            }
+          }
+        } catch (error) {
+          console.error("Database auth lookup note:", error);
+        }
+
+        return null;
+      },
+    }),
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.role = (user as any).role;
+        token.companyId = (user as any).companyId;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (token && session.user) {
+        session.user.id = token.id as string;
+        (session.user as any).role = token.role as string;
+        (session.user as any).companyId = token.companyId as string;
+      }
+      return session;
+    },
+  },
+});
