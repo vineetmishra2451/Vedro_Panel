@@ -73,13 +73,10 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex flex-col w-64 bg-[#493020] text-[#FCFAF3] shrink-0 min-h-screen border-r border-[#3b2619] select-none transition-all duration-200">
       {/* Brand Header */}
-      <div className="h-16 px-5 flex items-center justify-between border-b border-[#3b2619]">
+      <div className="h-16 px-5 flex items-center border-b border-[#3b2619]">
         <Link href="/" className="hover:opacity-95 transition-opacity">
           <VedroLogo variant="dark" />
         </Link>
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#E4BF22] text-[#493020] uppercase tracking-wider font-mono">
-          FY 26–27
-        </span>
       </div>
 
       {/* Navigation */}

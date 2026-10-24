@@ -402,10 +402,10 @@ export default function OverviewDashboardPage() {
         {/* Left Column (7 cols): Performance Chart, Sales by Channel & Expenses */}
         <div className="lg:col-span-7 space-y-5">
           {/* A. Business Performance Chart */}
-          <div className="bg-white border border-[#E8E2D5] rounded-2xl p-5 shadow-xs">
+          <div className="bg-white border border-[#E8E2D5] rounded-2xl p-4 sm:p-5 shadow-xs overflow-hidden">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3.5 border-b border-[#E8E2D5] gap-2">
-              <div>
-                <h4 className="font-bold text-[#493020] text-sm">
+              <div className="min-w-0">
+                <h4 className="font-bold text-[#493020] text-sm truncate sm:overflow-visible">
                   Business Performance (FY 2026–27)
                 </h4>
                 <p className="text-[11px] text-[#77736A] mt-0.5">
@@ -414,7 +414,7 @@ export default function OverviewDashboardPage() {
               </div>
 
               {/* Chart Legend */}
-              <div className="flex items-center gap-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 text-xs">
                 <span className="flex items-center gap-1.5 font-semibold text-[#493020]">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#E4BF22]"></span>
                   <span>Revenue</span>
@@ -431,8 +431,8 @@ export default function OverviewDashboardPage() {
             </div>
 
             {/* Visual Analytics Representation */}
-            <div className="mt-4 pt-2">
-              <div className="h-56 w-full flex items-end justify-between gap-2 px-2 border-b border-[#E8E2D5] pb-2">
+            <div className="mt-4 pt-2 overflow-x-auto pb-2 scrollbar-thin">
+              <div className="h-56 min-w-[320px] w-full flex items-end justify-between gap-1 sm:gap-2 px-1 sm:px-2 border-b border-[#E8E2D5] pb-2">
                 {monthlyData.map((d) => {
                   const revHeightPct =
                     d.revenue > 0
@@ -450,29 +450,29 @@ export default function OverviewDashboardPage() {
                   return (
                     <div
                       key={d.month}
-                      className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer"
+                      className="flex-1 flex flex-col items-center gap-1 group cursor-pointer min-w-0"
                     >
-                      <div className="w-full flex items-end justify-center gap-1 h-44">
+                      <div className="w-full flex items-end justify-center gap-0.5 sm:gap-1 h-44">
                         {/* Revenue Bar */}
                         <div
-                          className="w-2 sm:w-2.5 bg-[#E4BF22] rounded-t transition-all group-hover:brightness-90"
+                          className="w-1.5 sm:w-2.5 bg-[#E4BF22] rounded-t transition-all group-hover:brightness-90"
                           style={{ height: revHeightPct }}
                           title={`${d.month} Revenue: ₹${d.revenue.toLocaleString("en-IN")}`}
                         />
                         {/* Expense Bar */}
                         <div
-                          className="w-2 sm:w-2.5 bg-[#493020] rounded-t transition-all group-hover:brightness-90"
+                          className="w-1.5 sm:w-2.5 bg-[#493020] rounded-t transition-all group-hover:brightness-90"
                           style={{ height: expHeightPct }}
                           title={`${d.month} Expenses: ₹${d.expense.toLocaleString("en-IN")}`}
                         />
                         {/* Profit Bar */}
                         <div
-                          className="w-2 sm:w-2.5 bg-[#28764A] rounded-t transition-all group-hover:brightness-90"
+                          className="w-1.5 sm:w-2.5 bg-[#28764A] rounded-t transition-all group-hover:brightness-90"
                           style={{ height: profitHeightPct }}
                           title={`${d.month} Profit: ₹${d.profit.toLocaleString("en-IN")}`}
                         />
                       </div>
-                      <span className="text-[10px] font-semibold text-[#77736A] tracking-tighter truncate">
+                      <span className="text-[9px] sm:text-[10px] font-semibold text-[#77736A] tracking-tighter truncate">
                         {d.month}
                       </span>
                     </div>

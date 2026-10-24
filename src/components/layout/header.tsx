@@ -82,9 +82,6 @@ export function Header() {
             <h1 className="text-xs sm:text-sm font-bold text-[#493020] leading-none truncate max-w-[140px] sm:max-w-none">
               {title}
             </h1>
-            <span className="inline-flex items-center px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-[#F2EBD8] text-[#493020] border border-[#E8E2D5] shrink-0 font-mono">
-              FY 26–27
-            </span>
           </div>
         </div>
       </div>

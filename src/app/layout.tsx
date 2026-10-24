@@ -5,6 +5,14 @@ import { AuthProvider } from "@/components/providers/auth-provider";
 export const metadata: Metadata = {
   title: "Vedro Business Dashboard",
   description: "Executive control center for Vedro food products partnership",
+  icons: {
+    icon: [
+      { url: "/mobilevedrologo.png" },
+      { url: "/icon.png" },
+    ],
+    shortcut: "/mobilevedrologo.png",
+    apple: "/mobilevedrologo.png",
+  },
 };
 
 export default function RootLayout({
