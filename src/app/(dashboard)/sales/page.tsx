@@ -63,8 +63,19 @@ export default function SalesOrdersPage() {
   const [successMessage, setSuccessMessage] = useState("");
 
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [customerList, setCustomerList] = useState<{ id: string; name: string; phone: string }[]>([]);
+  const [partnersList, setPartnersList] = useState<{ id: string; name: string }[]>([
+    { id: "partner-vivek", name: "Vivek" },
+    { id: "partner-vineet", name: "Vineet" },
+    { id: "partner-varunesh", name: "Varunesh" },
+  ]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Referral states for sale
+  const [referralOption, setReferralOption] = useState<"NONE" | "PARTNER" | "CUSTOMER">("NONE");
+  const [referralPartner, setReferralPartner] = useState("Vivek");
+  const [referralCustomerName, setReferralCustomerName] = useState("");
 
   // Form state for new offline sale
   const [formData, setFormData] = useState({
@@ -83,6 +94,37 @@ export default function SalesOrdersPage() {
 
   const [formError, setFormError] = useState("");
 
+  const loadData = async () => {
+    try {
+      setLoadingOrders(true);
+      const [resOrders, resCust] = await Promise.all([
+        fetch("/api/orders"),
+        fetch("/api/customers"),
+      ]);
+
+      if (resOrders.ok) {
+        const data = await resOrders.json();
+        if (Array.isArray(data.orders)) {
+          setOrders(data.orders);
+        }
+      }
+
+      if (resCust.ok) {
+        const cData = await resCust.json();
+        if (Array.isArray(cData.customers)) {
+          setCustomerList(cData.customers);
+        }
+        if (Array.isArray(cData.partners) && cData.partners.length > 0) {
+          setPartnersList(cData.partners);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load orders or customers from database:", err);
+    } finally {
+      setLoadingOrders(false);
+    }
+  };
+
   useEffect(() => {
     setFormData((prev) => ({
       ...prev,
@@ -95,24 +137,7 @@ export default function SalesOrdersPage() {
       }
     }
 
-    const loadOrders = async () => {
-      try {
-        setLoadingOrders(true);
-        const res = await fetch("/api/orders");
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.orders)) {
-            setOrders(data.orders);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to load orders from database:", err);
-      } finally {
-        setLoadingOrders(false);
-      }
-    };
-
-    loadOrders();
+    loadData();
   }, []);
 
   const channels = [
@@ -145,13 +170,23 @@ export default function SalesOrdersPage() {
       return;
     }
 
+    if (referralOption === "CUSTOMER" && !referralCustomerName.trim()) {
+      setFormError("Please select or enter the referring customer.");
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          referralType: referralOption,
+          referralPartner: referralOption === "PARTNER" ? referralPartner : undefined,
+          referralCustomerName: referralOption === "CUSTOMER" ? referralCustomerName : undefined,
+        }),
       });
 
       if (!res.ok) {
@@ -182,6 +217,16 @@ export default function SalesOrdersPage() {
         paymentStatus: "PAID",
         notes: "",
       });
+      setReferralOption("NONE");
+      setReferralCustomerName("");
+
+      // Refresh customer list to include any new walk-in customer
+      fetch("/api/customers")
+        .then((r) => r.json())
+        .then((cData) => {
+          if (Array.isArray(cData.customers)) setCustomerList(cData.customers);
+        })
+        .catch(() => {});
 
       setTimeout(() => setSuccessMessage(""), 5000);
     } catch (err: any) {
@@ -319,6 +364,13 @@ export default function SalesOrdersPage() {
                           </span>
                         )}
                       </div>
+                      {ord.notes && ord.notes.includes("Referred by") && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#F2EBD8]/70 text-[#493020] border border-[#493020]/20">
+                            {ord.notes.match(/\[(.*?)\]/)?.[1] || ord.notes}
+                          </span>
+                        </div>
+                      )}
                       <div className="text-[#77736A] text-[11px] mt-1">
                         {ord.itemDescription} (Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)})
                       </div>
@@ -365,6 +417,13 @@ export default function SalesOrdersPage() {
                           {ord.customerPhone && (
                             <div className="text-[10px] text-[#77736A] font-mono">
                               {ord.customerPhone}
+                            </div>
+                          )}
+                          {ord.notes && ord.notes.includes("Referred by") && (
+                            <div className="mt-0.5">
+                              <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-[#F2EBD8]/70 text-[#493020] border border-[#493020]/20">
+                                {ord.notes.match(/\[(.*?)\]/)?.[1] || ord.notes}
+                              </span>
                             </div>
                           )}
                         </td>
@@ -644,6 +703,75 @@ export default function SalesOrdersPage() {
                 </div>
               </div>
 
+              {/* Referral Attribution */}
+              <div className="bg-[#FCFAF3] p-3 rounded-lg border border-[#E8E2D5] space-y-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-[#493020] uppercase tracking-wider mb-1">
+                    Referral / Sale Attribution (Optional)
+                  </label>
+                  <select
+                    value={referralOption}
+                    onChange={(e) =>
+                      setReferralOption(e.target.value as "NONE" | "PARTNER" | "CUSTOMER")
+                    }
+                    className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  >
+                    <option value="NONE">Direct / Walk-in Store (No Referral)</option>
+                    <option value="PARTNER">Partner Referral (Vivek, Vineet, Varunesh)</option>
+                    <option value="CUSTOMER">Customer Referral (from Customer List)</option>
+                  </select>
+                </div>
+
+                {referralOption === "PARTNER" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#493020] uppercase tracking-wider mb-1">
+                      Select Referring Partner *
+                    </label>
+                    <select
+                      value={referralPartner}
+                      onChange={(e) => setReferralPartner(e.target.value)}
+                      className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                    >
+                      {partnersList.map((p) => (
+                        <option key={p.id} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {referralOption === "CUSTOMER" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#493020] uppercase tracking-wider mb-1">
+                      Select Referring Customer (from Current Customer List) *
+                    </label>
+                    {customerList.length > 0 ? (
+                      <select
+                        value={referralCustomerName}
+                        onChange={(e) => setReferralCustomerName(e.target.value)}
+                        className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                      >
+                        <option value="">-- Choose Referring Customer --</option>
+                        {customerList.map((c) => (
+                          <option key={c.id} value={`${c.name} (${c.phone})`}>
+                            {c.name} — {c.phone}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="e.g. Existing Customer Name & Phone"
+                        value={referralCustomerName}
+                        onChange={(e) => setReferralCustomerName(e.target.value)}
+                        className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Notes */}
               <div>
                 <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
@@ -779,6 +907,17 @@ export default function SalesOrdersPage() {
                     {selectedDrawerOrder.paymentMode} • Status: {selectedDrawerOrder.paymentStatus}
                   </div>
                 </div>
+
+                {selectedDrawerOrder.notes && (
+                  <div className="pt-3 border-t border-[#E8E2D5]">
+                    <span className="text-[#77736A] block text-[10px] font-bold uppercase">
+                      Referral / Remarks
+                    </span>
+                    <div className="font-semibold text-[#493020] text-xs mt-0.5">
+                      {selectedDrawerOrder.notes}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   UserCheck,
   Plus,
@@ -13,6 +13,8 @@ import {
   Phone,
   Mail,
   MapPin,
+  Loader2,
+  UserPlus,
 } from "lucide-react";
 import { KpiCard } from "@/components/shared/kpi-card";
 import { MoneyDisplay } from "@/components/shared/money-display";
@@ -31,6 +33,11 @@ interface CustomerRecord {
   notes?: string;
 }
 
+interface PartnerRecord {
+  id: string;
+  name: string;
+}
+
 export default function CustomersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDrawerCustomer, setSelectedDrawerCustomer] = useState<CustomerRecord | null>(null);
@@ -38,6 +45,13 @@ export default function CustomersPage() {
   const [search, setSearch] = useState("");
 
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [partners, setPartners] = useState<PartnerRecord[]>([
+    { id: "partner-vivek", name: "Vivek" },
+    { id: "partner-vineet", name: "Vineet" },
+    { id: "partner-varunesh", name: "Varunesh" },
+  ]);
+  const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -46,12 +60,38 @@ export default function CustomersPage() {
     email: "",
     city: "Mumbai",
     source: "Retail Walk-in",
+    referralPartner: "Vivek",
+    referralCustomerName: "",
     notes: "",
   });
 
   const [formError, setFormError] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const fetchCustomers = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch("/api/customers");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.customers)) {
+          setCustomers(data.customers);
+        }
+        if (Array.isArray(data.partners) && data.partners.length > 0) {
+          setPartners(data.partners);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load customers:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
@@ -65,33 +105,61 @@ export default function CustomersPage() {
       return;
     }
 
-    const newCustomer: CustomerRecord = {
-      id: `cust-${Date.now()}`,
-      name: formData.name.trim(),
-      phone: formData.phone.trim(),
-      email: formData.email.trim() || undefined,
-      city: formData.city.trim() || undefined,
-      source: formData.source,
-      orderCount: 0,
-      totalSpentPaise: 0,
-      createdAt: new Date().toISOString(),
-      notes: formData.notes.trim() || undefined,
-    };
+    if (formData.source === "Customer Referral" && !formData.referralCustomerName.trim()) {
+      setFormError("Please select or enter the referring customer.");
+      return;
+    }
 
-    setCustomers([newCustomer, ...customers]);
-    setIsModalOpen(false);
-    setSuccessMessage(`Customer "${formData.name.trim()}" added to directory successfully!`);
+    setIsSubmitting(true);
 
-    setFormData({
-      name: "",
-      phone: "",
-      email: "",
-      city: "Mumbai",
-      source: "Retail Walk-in",
-      notes: "",
-    });
+    try {
+      const res = await fetch("/api/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...formData,
+          referralType:
+            formData.source === "Partner Referral"
+              ? "PARTNER"
+              : formData.source === "Customer Referral"
+              ? "CUSTOMER"
+              : "NONE",
+        }),
+      });
 
-    setTimeout(() => setSuccessMessage(""), 5000);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to save customer");
+      }
+
+      const data = await res.json();
+      const savedCustomer: CustomerRecord = data.customer;
+
+      setCustomers((prev) => [
+        savedCustomer,
+        ...prev.filter((c) => c.id !== savedCustomer.id && c.phone !== savedCustomer.phone),
+      ]);
+      setIsModalOpen(false);
+      setSuccessMessage(`Customer "${savedCustomer.name}" saved to directory successfully!`);
+
+      setFormData({
+        name: "",
+        phone: "",
+        email: "",
+        city: "Mumbai",
+        source: "Retail Walk-in",
+        referralPartner: partners[0]?.name || "Vivek",
+        referralCustomerName: "",
+        notes: "",
+      });
+
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Save customer error:", err);
+      setFormError(err?.message || "Could not save customer. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredCustomers = customers.filter((c) => {
@@ -100,9 +168,18 @@ export default function CustomersPage() {
     return (
       c.name.toLowerCase().includes(q) ||
       c.phone.includes(q) ||
-      (c.city && c.city.toLowerCase().includes(q))
+      (c.city && c.city.toLowerCase().includes(q)) ||
+      c.source.toLowerCase().includes(q)
     );
   });
+
+  // Calculate dynamic KPIs
+  const totalOrdersCount = customers.reduce((acc, c) => acc + c.orderCount, 0);
+  const totalNetSpendPaise = customers.reduce((acc, c) => acc + c.totalSpentPaise, 0);
+  const aovPaise = totalOrdersCount > 0 ? Math.round(totalNetSpendPaise / totalOrdersCount) : 0;
+  const repeatCustomersCount = customers.filter((c) => c.orderCount > 1).length;
+  const repeatRate =
+    customers.length > 0 ? Math.round((repeatCustomersCount / customers.length) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -115,14 +192,14 @@ export default function CustomersPage() {
             </span>
             <span className="text-[#77736A] text-xs">•</span>
             <span className="text-xs text-[#77736A]">
-              Permission-Controlled PII & AOV
+              Permission-Controlled PII & Referrals
             </span>
           </div>
           <h2 className="text-2xl font-bold tracking-tight text-[#29271F]">
             Customer Management
           </h2>
           <p className="text-xs text-[#77736A] mt-0.5">
-            Maintain customer contacts, order frequencies, net spend, repeat retention, and acquisition channels.
+            Maintain customer contacts, partner/customer referral attribution, order frequencies, and net spend.
           </p>
         </div>
 
@@ -149,11 +226,11 @@ export default function CustomersPage() {
           value={customers.length}
           format="number"
           status="actual"
-          subtext="Verified unique phone/emails"
+          subtext="Verified in database"
         />
         <KpiCard
           title="Average Order Value (AOV)"
-          value={0}
+          value={aovPaise}
           format="currency"
           status="actual"
           subtext="Net sales ÷ completed orders"
@@ -161,9 +238,9 @@ export default function CustomersPage() {
         <KpiCard
           title="Repeat Purchase Rate"
           value={null}
-          textValue="0%"
+          textValue={`${repeatRate}%`}
           status="actual"
-          subtext="Customers with >1 order"
+          subtext={`${repeatCustomersCount} customers with >1 order`}
         />
       </div>
 
@@ -174,10 +251,10 @@ export default function CustomersPage() {
             <Search className="w-3.5 h-3.5 text-[#77736A] absolute left-2.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search customer name, phone, city..."
+              placeholder="Search customer name, phone, referral, city..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg pl-8 pr-3 py-1.5 text-[#29271F] placeholder:text-[#77736A]/70 focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22] w-64"
+              className="text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg pl-8 pr-3 py-1.5 text-[#29271F] placeholder:text-[#77736A]/70 focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22] w-72"
             />
           </div>
 
@@ -186,12 +263,17 @@ export default function CustomersPage() {
           </div>
         </div>
 
-        {filteredCustomers.length === 0 ? (
+        {loading ? (
+          <div className="p-12 text-center text-[#77736A]">
+            <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2.5 text-[#E4BF22]" />
+            <p className="text-xs font-semibold text-[#493020]">Loading customers from database...</p>
+          </div>
+        ) : filteredCustomers.length === 0 ? (
           <div className="p-12 text-center text-[#77736A]">
             <UserCheck className="w-10 h-10 mx-auto mb-2.5 text-[#77736A]/40" />
             <h4 className="font-bold text-[#29271F] text-sm">No Customers in Directory</h4>
             <p className="text-xs text-[#77736A] max-w-sm mx-auto mt-1 leading-relaxed">
-              Click "+ Add Customer" to create direct customer accounts or record walk-in client details.
+              Click "+ Add Customer" to create direct customer accounts or record walk-in client details with referral attribution.
             </p>
             <button
               onClick={() => setIsModalOpen(true)}
@@ -208,40 +290,49 @@ export default function CustomersPage() {
                   <th className="px-5 py-3">Customer Name</th>
                   <th className="px-5 py-3">Contact</th>
                   <th className="px-5 py-3">City</th>
-                  <th className="px-5 py-3">Acquisition Source</th>
+                  <th className="px-5 py-3">Acquisition Source / Referral</th>
                   <th className="px-5 py-3">Orders</th>
                   <th className="px-5 py-3 text-right">Total Spent (₹)</th>
                   <th className="px-5 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E2D5] text-[#29271F]">
-                {filteredCustomers.map((cust) => (
-                  <tr key={cust.id} className="hover:bg-[#FCFAF3]/80 transition-colors">
-                    <td className="px-5 py-3.5 font-bold">{cust.name}</td>
-                    <td className="px-5 py-3.5 text-[#77736A] font-mono text-[11px]">
-                      <div>{cust.phone}</div>
-                      {cust.email && <div className="text-[10px]">{cust.email}</div>}
-                    </td>
-                    <td className="px-5 py-3.5 font-medium">{cust.city || "—"}</td>
-                    <td className="px-5 py-3.5">
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#FCFAF3] text-[#29271F] border border-[#E8E2D5]">
-                        {cust.source}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 font-mono">{cust.orderCount}</td>
-                    <td className="px-5 py-3.5 text-right font-mono font-bold tabular-nums">
-                      <MoneyDisplay paise={cust.totalSpentPaise} />
-                    </td>
-                    <td className="px-5 py-3.5 text-center">
-                      <button
-                        onClick={() => setSelectedDrawerCustomer(cust)}
-                        className="text-[11px] font-semibold text-[#493020] hover:underline"
-                      >
-                        Profile
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filteredCustomers.map((cust) => {
+                  const isReferral = cust.source.toLowerCase().includes("referral");
+                  return (
+                    <tr key={cust.id} className="hover:bg-[#FCFAF3]/80 transition-colors">
+                      <td className="px-5 py-3.5 font-bold">{cust.name}</td>
+                      <td className="px-5 py-3.5 text-[#77736A] font-mono text-[11px]">
+                        <div>{cust.phone}</div>
+                        {cust.email && <div className="text-[10px]">{cust.email}</div>}
+                      </td>
+                      <td className="px-5 py-3.5 font-medium">{cust.city || "—"}</td>
+                      <td className="px-5 py-3.5">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                            isReferral
+                              ? "bg-[#F2EBD8]/70 text-[#493020] border-[#493020]/25 font-bold"
+                              : "bg-[#FCFAF3] text-[#29271F] border-[#E8E2D5]"
+                          }`}
+                        >
+                          {cust.source}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 font-mono">{cust.orderCount}</td>
+                      <td className="px-5 py-3.5 text-right font-mono font-bold tabular-nums">
+                        <MoneyDisplay paise={cust.totalSpentPaise} />
+                      </td>
+                      <td className="px-5 py-3.5 text-center">
+                        <button
+                          onClick={() => setSelectedDrawerCustomer(cust)}
+                          className="text-[11px] font-semibold text-[#493020] hover:underline"
+                        >
+                          Profile
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -251,14 +342,14 @@ export default function CustomersPage() {
       {/* Add Customer Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#493020]/50 backdrop-blur-xs">
-          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl border border-[#E8E2D5]">
+          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl border border-[#E8E2D5] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3.5 border-b border-[#E8E2D5]">
               <div>
                 <h3 className="text-sm font-bold text-[#29271F] leading-tight">
                   Add New Customer
                 </h3>
                 <p className="text-[11px] text-[#77736A]">
-                  Register customer contact and billing details
+                  Register contact details and partner/customer referral source
                 </p>
               </div>
               <button
@@ -342,16 +433,78 @@ export default function CustomersPage() {
                   <select
                     value={formData.source}
                     onChange={(e) => setFormData({ ...formData, source: e.target.value })}
-                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
                   >
                     <option value="Retail Walk-in">Retail Walk-in / Direct</option>
                     <option value="Website (D2C)">Website (D2C)</option>
                     <option value="B2B Wholesale">B2B Wholesale Partner</option>
                     <option value="Instagram / Meta Ad">Instagram / Meta Ad</option>
-                    <option value="Referral">Partner / Customer Referral</option>
+                    <option value="Partner Referral">Partner Referral (Vivek, Vineet, Varunesh)</option>
+                    <option value="Customer Referral">Customer Referral (from Directory)</option>
                   </select>
                 </div>
               </div>
+
+              {/* Dynamic Referral Sub-Option: Partner */}
+              {formData.source === "Partner Referral" && (
+                <div className="bg-[#FCFAF3] p-3 rounded-lg border border-[#E8E2D5] space-y-1">
+                  <label className="block text-[11px] font-bold text-[#493020] uppercase tracking-wider">
+                    Select Referring Partner *
+                  </label>
+                  <select
+                    value={formData.referralPartner}
+                    onChange={(e) => setFormData({ ...formData, referralPartner: e.target.value })}
+                    className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  >
+                    {partners.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-[#77736A] mt-0.5">
+                    Associates customer acquisition directly with the selected co-founding partner.
+                  </p>
+                </div>
+              )}
+
+              {/* Dynamic Referral Sub-Option: Customer */}
+              {formData.source === "Customer Referral" && (
+                <div className="bg-[#FCFAF3] p-3 rounded-lg border border-[#E8E2D5] space-y-1">
+                  <label className="block text-[11px] font-bold text-[#493020] uppercase tracking-wider">
+                    Select Referring Customer (from Current Customer List) *
+                  </label>
+                  {customers.length > 0 ? (
+                    <select
+                      value={formData.referralCustomerName}
+                      onChange={(e) =>
+                        setFormData({ ...formData, referralCustomerName: e.target.value })
+                      }
+                      className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                    >
+                      <option value="">-- Choose Referring Customer --</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={`${c.name} (${c.phone})`}>
+                          {c.name} — {c.phone}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="e.g. Existing Customer Name & Phone"
+                      value={formData.referralCustomerName}
+                      onChange={(e) =>
+                        setFormData({ ...formData, referralCustomerName: e.target.value })
+                      }
+                      className="w-full text-xs bg-white border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                    />
+                  )}
+                  <p className="text-[10px] text-[#77736A] mt-0.5">
+                    Select the existing client from your directory who referred this new customer.
+                  </p>
+                </div>
+              )}
 
               {/* Notes */}
               <div>
@@ -378,9 +531,11 @@ export default function CustomersPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Save Customer
+                  {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSubmitting ? "Saving Customer..." : "Save Customer"}</span>
                 </button>
               </div>
             </form>
@@ -460,12 +615,23 @@ export default function CustomersPage() {
 
                 <div className="pt-3 border-t border-[#E8E2D5]">
                   <span className="text-[10px] text-[#77736A] block uppercase font-bold">
-                    Acquisition Channel
+                    Acquisition Channel / Referral
                   </span>
                   <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-xs font-semibold bg-[#FCFAF3] text-[#29271F] border border-[#E8E2D5]">
                     {selectedDrawerCustomer.source}
                   </span>
                 </div>
+
+                {selectedDrawerCustomer.notes && (
+                  <div className="pt-3 border-t border-[#E8E2D5]">
+                    <span className="text-[10px] text-[#77736A] block uppercase font-bold">
+                      Notes / Remarks
+                    </span>
+                    <p className="text-[11px] text-[#77736A] mt-1 leading-relaxed">
+                      {selectedDrawerCustomer.notes}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -80,8 +80,22 @@ export async function POST(req: Request) {
       gstRate,
       paymentMode,
       paymentStatus,
+      referralType,
+      referralPartner,
+      referralCustomerName,
       notes,
     } = body;
+
+    let referralTag = "";
+    if (referralType === "PARTNER" && referralPartner) {
+      referralTag = `Referred by Partner: ${referralPartner}`;
+    } else if (referralType === "CUSTOMER" && referralCustomerName) {
+      referralTag = `Referred by Customer: ${referralCustomerName}`;
+    }
+
+    const finalNotes = referralTag
+      ? (notes ? `[${referralTag}] ${notes}` : `[${referralTag}]`)
+      : notes || undefined;
 
     const qty = parseInt(quantity) || 1;
     const unitPriceRs = parseFloat(unitPrice) || 0;
@@ -138,6 +152,7 @@ export async function POST(req: Request) {
             orderCount: { increment: 1 },
             totalSpentPaise: { increment: totalPaise },
             lastPurchaseAt: new Date(date || Date.now()),
+            ...(referralTag && !existingCustomer.source ? { source: referralTag } : {}),
           },
         });
       } else {
@@ -150,6 +165,7 @@ export async function POST(req: Request) {
             lastPurchaseAt: new Date(date || Date.now()),
             orderCount: 1,
             totalSpentPaise: totalPaise,
+            source: referralTag || "Offline Store Walk-in",
           },
         });
         customerId = newCustomer.id;
@@ -190,7 +206,7 @@ export async function POST(req: Request) {
         discountPaise,
         taxPaise,
         totalPaise,
-        notes: notes || undefined,
+        notes: finalNotes,
         createdBy,
         ...(product
           ? {
