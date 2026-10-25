@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import {
   TrendingUp,
@@ -19,7 +19,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { KpiCard } from "@/components/shared/kpi-card";
-import { GlobalFilters } from "@/components/layout/global-filters";
+import { GlobalFilters, FilterState } from "@/components/layout/global-filters";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { formatINR, formatDate } from "@/lib/format";
 import { getCachedData, setCachedData } from "@/lib/cache";
@@ -91,9 +91,91 @@ export default function OverviewDashboardPage() {
     fetchDashboardOrders();
   }, []);
 
-  // Compute live revenue and sales metrics
-  const totalNetRevenuePaise = orders.reduce((acc, o) => acc + o.totalPaise, 0);
-  const totalUnitsSold = orders.reduce((acc, o) => acc + o.quantity, 0);
+  const [filterState, setFilterState] = useState<FilterState>({
+    dateRange: "ALL",
+    channel: "ALL",
+    statusMode: "ALL",
+    search: "",
+  });
+
+  // Filter orders according to active GlobalFilter controls
+  const filteredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      // 1. Channel filter
+      if (filterState.channel !== "ALL") {
+        const lower = (o.channel || "").toLowerCase();
+        if (filterState.channel === "OFFLINE" && !lower.includes("offline") && !lower.includes("store")) {
+          return false;
+        }
+        if (filterState.channel === "WEBSITE" && !lower.includes("website") && !lower.includes("d2c")) {
+          return false;
+        }
+        if (filterState.channel === "AMAZON" && !lower.includes("amazon")) {
+          return false;
+        }
+        if (filterState.channel === "FLIPKART" && !lower.includes("flipkart")) {
+          return false;
+        }
+        if (filterState.channel === "B2B" && !lower.includes("b2b") && !lower.includes("wholesale")) {
+          return false;
+        }
+        if (filterState.channel === "EVENTS" && !lower.includes("event") && !lower.includes("pop")) {
+          return false;
+        }
+      }
+
+      // 2. Status filter
+      if (filterState.statusMode !== "ALL") {
+        if (filterState.statusMode === "PAID" && o.paymentStatus !== "PAID") return false;
+        if (filterState.statusMode === "PENDING" && o.paymentStatus !== "PENDING") return false;
+      }
+
+      // 3. Date range filter
+      if (filterState.dateRange !== "ALL") {
+        const d = new Date(o.date);
+        const now = new Date();
+        if (filterState.dateRange === "THIS_MONTH") {
+          if (d.getMonth() !== now.getMonth() || d.getFullYear() !== now.getFullYear()) {
+            return false;
+          }
+        } else if (filterState.dateRange === "LAST_30") {
+          const diff = (now.getTime() - d.getTime()) / (1000 * 3600 * 24);
+          if (diff < 0 || diff > 30) return false;
+        } else if (filterState.dateRange === "FY26-27") {
+          const start = new Date(2026, 3, 1);
+          const end = new Date(2027, 2, 31, 23, 59, 59);
+          if (d < start || d > end) return false;
+        } else if (filterState.dateRange === "Q1") {
+          if (d.getMonth() < 3 || d.getMonth() > 5) return false;
+        } else if (filterState.dateRange === "Q2") {
+          if (d.getMonth() < 6 || d.getMonth() > 8) return false;
+        } else if (filterState.dateRange === "Q3") {
+          if (d.getMonth() < 9 || d.getMonth() > 11) return false;
+        } else if (filterState.dateRange === "Q4") {
+          if (d.getMonth() < 0 || d.getMonth() > 2) return false;
+        }
+      }
+
+      // 4. Search query
+      if (filterState.search && filterState.search.trim()) {
+        const q = filterState.search.toLowerCase().trim();
+        const match =
+          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+          (o.customerPhone && o.customerPhone.toLowerCase().includes(q)) ||
+          (o.orderNumber && o.orderNumber.toLowerCase().includes(q)) ||
+          (o.itemDescription && o.itemDescription.toLowerCase().includes(q)) ||
+          (o.channel && o.channel.toLowerCase().includes(q)) ||
+          (o.notes && o.notes.toLowerCase().includes(q));
+        if (!match) return false;
+      }
+
+      return true;
+    });
+  }, [orders, filterState]);
+
+  // Compute live revenue and sales metrics based on filtered results
+  const totalNetRevenuePaise = filteredOrders.reduce((acc, o) => acc + o.totalPaise, 0);
+  const totalUnitsSold = filteredOrders.reduce((acc, o) => acc + o.quantity, 0);
   const estimatedGrossProfitPaise = Math.round(totalNetRevenuePaise * 0.42);
   const estimatedOperatingProfitPaise = Math.round(totalNetRevenuePaise * 0.28);
 
@@ -107,7 +189,7 @@ export default function OverviewDashboardPage() {
     "Events & Pop-ups": { count: 0, totalPaise: 0 },
   };
 
-  orders.forEach((ord) => {
+  filteredOrders.forEach((ord) => {
     let matchedKey = "Offline / Direct Store";
     const lowerChannel = (ord.channel || "").toLowerCase();
     if (lowerChannel.includes("website") || lowerChannel.includes("d2c")) {
@@ -211,7 +293,7 @@ export default function OverviewDashboardPage() {
   ];
 
   const monthlyData = fyMonths.map((m) => {
-    const monthOrders = orders.filter((o) => {
+    const monthOrders = filteredOrders.filter((o) => {
       const d = new Date(o.date);
       return d.getFullYear() === m.year && d.getMonth() === m.month;
     });
@@ -229,6 +311,60 @@ export default function OverviewDashboardPage() {
   });
 
   const maxMonthRev = Math.max(...monthlyData.map((d) => d.revenue), 1000);
+
+  const handleExportCsv = () => {
+    if (filteredOrders.length === 0) {
+      alert("No orders to export with current filters.");
+      return;
+    }
+    const headers = [
+      "Order Number",
+      "Date",
+      "Customer Name",
+      "Customer Phone",
+      "Sales Channel",
+      "Product / SKU",
+      "Quantity",
+      "Unit Price (INR)",
+      "Subtotal (INR)",
+      "Discount (INR)",
+      "Tax (INR)",
+      "Total Amount (INR)",
+      "Payment Mode",
+      "Payment Status",
+      "Notes",
+    ];
+
+    const rows = filteredOrders.map((o) => [
+      `"${o.orderNumber}"`,
+      `"${o.date}"`,
+      `"${(o.customerName || "").replace(/"/g, '""')}"`,
+      `"${o.customerPhone || ""}"`,
+      `"${o.channel || ""}"`,
+      `"${(o.itemDescription || "").replace(/"/g, '""')}"`,
+      o.quantity,
+      (o.unitPricePaise / 100).toFixed(2),
+      (o.subtotalPaise / 100).toFixed(2),
+      (o.discountPaise / 100).toFixed(2),
+      (o.taxPaise / 100).toFixed(2),
+      (o.totalPaise / 100).toFixed(2),
+      `"${o.paymentMode}"`,
+      `"${o.paymentStatus}"`,
+      `"${(o.notes || "").replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `vedro_orders_${new Date().toISOString().split("T")[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const inventoryHealthItems = [
     {
@@ -290,46 +426,23 @@ export default function OverviewDashboardPage() {
   return (
     <div className="space-y-6">
       {/* 1. Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-[#493020]">
-            Overview
-          </h2>
-          <p className="text-xs text-[#77736A] mt-0.5">
-            Real-time financial performance, live sales orders, and operating health.
-          </p>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Link
-            href="/sales?action=new-order"
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] rounded-xl transition-all shadow-xs active:scale-[0.99]"
-          >
-            <ShoppingCart className="w-3.5 h-3.5 text-[#493020]" />
-            <span>+ Record Sale</span>
-          </Link>
-
-          <Link
-            href="/finance?action=new-entry"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#493020] bg-[#F2EBD8] hover:bg-[#E8DFC7] border border-[#E8E2D5] rounded-xl transition-colors"
-          >
-            <Receipt className="w-3.5 h-3.5 text-[#493020]" />
-            <span>+ Buy Raw Material</span>
-          </Link>
-
-          <Link
-            href="/reports"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#29271F] bg-white hover:bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl transition-colors"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-[#77736A]" />
-            <span>Reports</span>
-          </Link>
-        </div>
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight text-[#493020]">
+          Overview
+        </h2>
+        <p className="text-xs text-[#77736A] mt-0.5">
+          Real-time financial performance, live sales orders, and operating health.
+        </p>
       </div>
 
       {/* 2. Global Filter Controls */}
-      <GlobalFilters />
+      <GlobalFilters
+        onFilterChange={setFilterState}
+        showExport={true}
+        onExport={handleExportCsv}
+        filteredCount={filteredOrders.length}
+        totalCount={orders.length}
+      />
 
       {/* 3. Primary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
@@ -339,7 +452,11 @@ export default function OverviewDashboardPage() {
           format="currency"
           drillDownHref="/sales"
           icon={<TrendingUp className="w-4 h-4" />}
-          subtext={`${orders.length} recorded orders`}
+          subtext={
+            filteredOrders.length === orders.length
+              ? `${orders.length} recorded orders`
+              : `${filteredOrders.length} of ${orders.length} orders`
+          }
         />
 
         <KpiCard
@@ -500,7 +617,7 @@ export default function OverviewDashboardPage() {
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-4 h-4 text-[#493020]" />
                 <h4 className="font-bold text-[#493020] text-sm">
-                  Recent Sales & Orders ({orders.length})
+                  Recent Sales & Orders ({filteredOrders.length})
                 </h4>
               </div>
               <Link
@@ -516,19 +633,39 @@ export default function OverviewDashboardPage() {
                 <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[#E4BF22]" />
                 <p className="text-xs">Loading orders...</p>
               </div>
-            ) : orders.length === 0 ? (
+            ) : filteredOrders.length === 0 ? (
               <div className="py-8 text-center text-[#77736A]">
-                <p className="text-xs">No sales recorded yet.</p>
-                <Link
-                  href="/sales?action=new-order"
-                  className="mt-2 inline-block text-xs font-bold text-[#493020] underline"
-                >
-                  + Record first sale
-                </Link>
+                <p className="text-xs">
+                  {orders.length === 0
+                    ? "No sales recorded yet."
+                    : "No orders match the current filter criteria."}
+                </p>
+                {orders.length === 0 ? (
+                  <Link
+                    href="/sales?action=new-order"
+                    className="mt-2 inline-block text-xs font-bold text-[#493020] underline"
+                  >
+                    + Record first sale
+                  </Link>
+                ) : (
+                  <button
+                    onClick={() =>
+                      setFilterState({
+                        dateRange: "ALL",
+                        channel: "ALL",
+                        statusMode: "ALL",
+                        search: "",
+                      })
+                    }
+                    className="mt-2 inline-block text-xs font-bold text-[#493020] underline cursor-pointer"
+                  >
+                    Reset filters
+                  </button>
+                )}
               </div>
             ) : (
               <div className="divide-y divide-[#E8E2D5] mt-2">
-                {orders.slice(0, 5).map((ord) => (
+                {filteredOrders.slice(0, 5).map((ord) => (
                   <div key={ord.id} className="py-2.5 flex items-center justify-between text-xs">
                     <div className="min-w-0 pr-2">
                       <div className="flex items-center gap-2">
