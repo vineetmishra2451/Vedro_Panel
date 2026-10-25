@@ -24,7 +24,8 @@ async function main() {
   console.log(`✓ Company ready: ${company.name} (${company.id})`);
 
   // 2. Create Default Admin User
-  const passwordHash = await bcrypt.hash("admin123", 10);
+  const seedPassword = process.env.ADMIN_PASSWORD || "vedro-partner-2026";
+  const passwordHash = await bcrypt.hash(seedPassword, 10);
   const adminUser = await prisma.appUser.upsert({
     where: { email: "admin@vedro.com" },
     update: { passwordHash },
@@ -52,7 +53,7 @@ async function main() {
     },
   });
 
-  console.log(`✓ Admin user ready: ${adminUser.email} (Password: admin123)`);
+  console.log(`✓ Admin user ready: ${adminUser.email}`);
 
   // 3. Create the 3 Equal Partners (Vivek, Vineet, Varunesh) with ZERO opening balance
   const partnerNames = [

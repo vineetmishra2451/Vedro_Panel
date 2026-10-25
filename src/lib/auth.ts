@@ -10,28 +10,24 @@ const DEFAULT_USERS = [
     email: "admin@vedro.com",
     name: "Admin",
     role: "ADMIN",
-    password: process.env.ADMIN_PASSWORD || "admin123",
   },
   {
     username: "vineet",
     email: "vineet@vedrolife.com",
     name: "Vineet Mishra",
     role: "PARTNER",
-    password: process.env.ADMIN_PASSWORD || "admin123",
   },
   {
     username: "vivek",
     email: "vivek@vedrolife.com",
     name: "Vivek",
     role: "PARTNER",
-    password: process.env.ADMIN_PASSWORD || "admin123",
   },
   {
     username: "varunesh",
     email: "varunesh@vedrolife.com",
     name: "Varunesh",
     role: "PARTNER",
-    password: process.env.ADMIN_PASSWORD || "admin123",
   },
 ];
 
@@ -68,7 +64,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           (u) => u.username.toLowerCase() === idInput || u.email.toLowerCase() === idInput
         );
 
-        if (defaultUser && password === defaultUser.password) {
+        const configuredPassword = process.env.ADMIN_PASSWORD || "vedro-partner-2026";
+        if (defaultUser && password === configuredPassword) {
           return {
             id: `usr-${defaultUser.username}`,
             name: defaultUser.name,
