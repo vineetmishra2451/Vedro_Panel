@@ -500,7 +500,7 @@ export default function ProductsPage() {
   };
 
   // Handle Log Stock Movement / Inward
-  const handleMovementSubmit = (e: React.FormEvent) => {
+  const handleMovementSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMovementFormError("");
 
@@ -572,6 +572,26 @@ export default function ProductsPage() {
     setSuccessMessage(
       `Stock Inward (${movementForm.type}) of ${qty} ${targetProduct.unit} for ${targetProduct.sku} recorded! (Remember to book the supplier bill in Finance).`
     );
+
+    // Persist to database in background
+    try {
+      await fetch("/api/products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "movement",
+          productSku: targetProduct.sku,
+          type: movementForm.type,
+          quantity: qty,
+          unitCostRupees: movementForm.unitCostRupees,
+          supplierName: movementForm.supplierName,
+          invoiceRef: movementForm.invoiceRef,
+          notes: movementForm.notes,
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to persist stock movement to backend:", err);
+    }
 
     setMovementForm({
       date: "2026-04-15",

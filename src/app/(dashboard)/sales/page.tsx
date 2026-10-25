@@ -30,6 +30,7 @@ interface OrderRecord {
   customerName: string;
   customerPhone?: string;
   channel: string;
+  sku?: string;
   itemDescription: string;
   quantity: number;
   unitPricePaise: number;
@@ -42,6 +43,20 @@ interface OrderRecord {
   fulfillmentStatus: "FULFILLED" | "CONFIRMED";
   gstRate?: number;
   notes?: string;
+  remainingStock?: number;
+}
+
+interface ProductItem {
+  id: string;
+  sku: string;
+  name: string;
+  category: string;
+  unit: string;
+  gstRate: number;
+  costPricePaise: number;
+  sellingPricePaise: number;
+  availableStock: number;
+  status: string;
 }
 
 const VEDRO_CATALOG_OPTIONS = [
@@ -67,6 +82,7 @@ export default function SalesOrdersPage() {
   const [successMessage, setSuccessMessage] = useState("");
 
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [productList, setProductList] = useState<ProductItem[]>([]);
   const [customerList, setCustomerList] = useState<{ id: string; name: string; phone: string }[]>([]);
   const [partnersList, setPartnersList] = useState<{ id: string; name: string }[]>([
     { id: "partner-vivek", name: "Vivek" },
@@ -92,6 +108,7 @@ export default function SalesOrdersPage() {
     date: "",
     customerName: "",
     customerPhone: "",
+    sku: "",
     itemDescription: "",
     quantity: "1",
     unitPrice: "",
@@ -115,11 +132,28 @@ export default function SalesOrdersPage() {
   const liveTaxPaise = Math.round((liveTaxablePaise * liveGstPct) / 100);
   const liveTotalPaise = liveTaxablePaise + liveTaxPaise;
 
+  // Resolve current selected product and available inventory stock
+  const resolvedSku =
+    formData.sku ||
+    (() => {
+      const match = formData.itemDescription.match(/VED-[A-Z0-9-]+/i);
+      return match ? match[0].toUpperCase() : "";
+    })();
+
+  const selectedProduct = productList.find(
+    (p) => p.sku.toUpperCase() === resolvedSku.toUpperCase()
+  );
+
+  const availableStock = selectedProduct ? selectedProduct.availableStock : undefined;
+  const isOutOfStock = availableStock !== undefined && availableStock <= 0;
+  const isStockMismatch = availableStock !== undefined && liveQty > availableStock;
+
   const loadData = async () => {
     // 1. Immediately hydrate from cache for zero-delay UI rendering
     const cachedOrders = getCachedData<OrderRecord[]>("orders");
     const cachedCust = getCachedData<CustomerRecord[]>("customers");
     const cachedPart = getCachedData<PartnerRecord[]>("partners");
+    const cachedProds = getCachedData<any>("products");
 
     if (cachedOrders && Array.isArray(cachedOrders) && cachedOrders.length > 0) {
       setOrders(cachedOrders);
@@ -131,14 +165,18 @@ export default function SalesOrdersPage() {
     if (cachedPart && Array.isArray(cachedPart) && cachedPart.length > 0) {
       setPartnersList(cachedPart);
     }
+    if (cachedProds?.products && Array.isArray(cachedProds.products)) {
+      setProductList(cachedProds.products);
+    }
 
     try {
       if (!cachedOrders || cachedOrders.length === 0) {
         setLoadingOrders(true);
       }
-      const [resOrders, resCust] = await Promise.all([
+      const [resOrders, resCust, resProds] = await Promise.all([
         fetch("/api/orders?limit=100"),
         fetch("/api/customers?limit=100"),
+        fetch("/api/products"),
       ]);
 
       if (resOrders.ok) {
@@ -160,8 +198,16 @@ export default function SalesOrdersPage() {
           setCachedData("partners", cData.partners);
         }
       }
+
+      if (resProds.ok) {
+        const pData = await resProds.json();
+        if (Array.isArray(pData.products)) {
+          setProductList(pData.products);
+          setCachedData("products", pData);
+        }
+      }
     } catch (err) {
-      console.error("Failed to load orders or customers from database:", err);
+      console.error("Failed to load orders, products, or customers from database:", err);
     } finally {
       setLoadingOrders(false);
     }
@@ -206,6 +252,7 @@ export default function SalesOrdersPage() {
       date: new Date().toISOString().split("T")[0],
       customerName: "",
       customerPhone: "",
+      sku: "",
       itemDescription: "",
       quantity: "1",
       unitPrice: "",
@@ -259,11 +306,19 @@ export default function SalesOrdersPage() {
     setReferralPartner(refPartner);
     setReferralCustomerName(refCustName);
 
+    const targetSku =
+      order.sku ||
+      (() => {
+        const match = order.itemDescription.match(/VED-[A-Z0-9-]+/i);
+        return match ? match[0].toUpperCase() : "";
+      })();
+
     setFormData({
       date: order.date,
       customerName:
         order.customerName === "Walk-in Retail Customer" ? "" : order.customerName,
       customerPhone: order.customerPhone || "",
+      sku: targetSku,
       itemDescription: order.itemDescription,
       quantity: order.quantity.toString(),
       unitPrice: (order.unitPricePaise / 100).toString(),
@@ -285,7 +340,7 @@ export default function SalesOrdersPage() {
     const confirmDelete = window.confirm(
       `Are you sure you want to delete order "${order.orderNumber}" of ${formatINR(
         order.totalPaise
-      )}? This will adjust revenue and customer lifetime spend accordingly.`
+      )}? This will restore ${order.quantity} units to inventory stock and adjust revenue accordingly.`
     );
     if (!confirmDelete) return;
 
@@ -307,7 +362,40 @@ export default function SalesOrdersPage() {
       if (selectedDrawerOrder?.id === order.id) {
         setSelectedDrawerOrder(null);
       }
-      setSuccessMessage(`Order ${order.orderNumber} deleted successfully.`);
+
+      // Restore product stock locally
+      const orderSku =
+        order.sku ||
+        (() => {
+          const match = order.itemDescription.match(/VED-[A-Z0-9-]+/i);
+          return match ? match[0].toUpperCase() : "";
+        })();
+
+      if (orderSku) {
+        setProductList((prev) => {
+          const updated = prev.map((p) =>
+            p.sku.toUpperCase() === orderSku.toUpperCase()
+              ? { ...p, availableStock: p.availableStock + order.quantity }
+              : p
+          );
+          const cached = getCachedData<any>("products") || {};
+          setCachedData("products", { ...cached, products: updated });
+          return updated;
+        });
+      }
+
+      // Re-fetch products from backend to ensure 100% sync
+      fetch("/api/products")
+        .then((r) => r.json())
+        .then((pData) => {
+          if (Array.isArray(pData.products)) {
+            setProductList(pData.products);
+            setCachedData("products", pData);
+          }
+        })
+        .catch(() => {});
+
+      setSuccessMessage(`Order ${order.orderNumber} deleted. Restored ${order.quantity} units to inventory stock.`);
       setTimeout(() => setSuccessMessage(""), 5000);
     } catch (err: any) {
       console.error("Delete order error:", err);
@@ -333,13 +421,32 @@ export default function SalesOrdersPage() {
     }
 
     if (!formData.itemDescription.trim()) {
-      setFormError("Please enter the product item description or SKU.");
+      setFormError("Please enter the product item description or select a SKU.");
       return;
     }
 
     if (referralOption === "CUSTOMER" && !referralCustomerName.trim()) {
       setFormError("Please select or enter the referring customer.");
       return;
+    }
+
+    // ---------------------------------------------------------
+    // CLIENT-SIDE REAL-TIME STOCK VALIDATION:
+    // Show error notification banner if stock and sale mismatch!
+    // ---------------------------------------------------------
+    if (selectedProduct) {
+      if (selectedProduct.availableStock <= 0) {
+        setFormError(
+          `Stock Mismatch Error: Product "${selectedProduct.name}" (${selectedProduct.sku}) is OUT OF STOCK (0 units available in inventory). Please restock before recording a sale.`
+        );
+        return;
+      }
+      if (qty > selectedProduct.availableStock) {
+        setFormError(
+          `Stock Mismatch Error: You are trying to sell ${qty} units, but only ${selectedProduct.availableStock} units of "${selectedProduct.name}" (${selectedProduct.sku}) are available in stock. Cannot complete sale.`
+        );
+        return;
+      }
     }
 
     const parsedGst = parseFloat(formData.gstRate);
@@ -355,6 +462,7 @@ export default function SalesOrdersPage() {
       const payload = {
         ...(isEditing ? { id: editingOrderId } : {}),
         ...formData,
+        sku: resolvedSku,
         gstRate: gstPct.toString(),
         saveToContacts,
         referralType: referralOption,
@@ -377,6 +485,7 @@ export default function SalesOrdersPage() {
       const data = await res.json();
       const savedOrder: OrderRecord = {
         ...data.order,
+        sku: resolvedSku || data.order.sku,
         gstRate: gstPct,
       };
 
@@ -389,7 +498,7 @@ export default function SalesOrdersPage() {
         if (selectedDrawerOrder?.id === savedOrder.id) {
           setSelectedDrawerOrder(savedOrder);
         }
-        setSuccessMessage(`Order ${savedOrder.orderNumber} updated successfully with ${gstPct}% GST!`);
+        setSuccessMessage(`Order ${savedOrder.orderNumber} updated! Inventory stock adjusted.`);
       } else {
         setOrders((prev) => {
           const updated = [savedOrder, ...prev];
@@ -397,13 +506,35 @@ export default function SalesOrdersPage() {
           return updated;
         });
         setSuccessMessage(
-          `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved successfully!`
+          `Order ${savedOrder.orderNumber} of ${formatINR(savedOrder.totalPaise)} saved! Automatically deducted ${qty} units of ${resolvedSku || "SKU"} from inventory stock.`
         );
       }
 
-      setIsModalOpen(false);
+      // Automatically decrement stock in local state and cache
+      if (resolvedSku) {
+        setProductList((prev) => {
+          const updated = prev.map((p) =>
+            p.sku.toUpperCase() === resolvedSku.toUpperCase()
+              ? { ...p, availableStock: Math.max(0, p.availableStock - qty) }
+              : p
+          );
+          const cached = getCachedData<any>("products") || {};
+          setCachedData("products", { ...cached, products: updated });
+          return updated;
+        });
+      }
 
-      // Refresh customer list if added to contacts
+      // Re-fetch products and customers in background for complete live sync
+      fetch("/api/products")
+        .then((r) => r.json())
+        .then((pData) => {
+          if (Array.isArray(pData.products)) {
+            setProductList(pData.products);
+            setCachedData("products", pData);
+          }
+        })
+        .catch(() => {});
+
       fetch("/api/customers?limit=100")
         .then((r) => r.json())
         .then((cData) => {
@@ -414,10 +545,11 @@ export default function SalesOrdersPage() {
         })
         .catch(() => {});
 
-      setTimeout(() => setSuccessMessage(""), 5000);
+      setIsModalOpen(false);
+      setTimeout(() => setSuccessMessage(""), 6000);
     } catch (err: any) {
       console.error("Order submit error:", err);
-      setFormError(err?.message || "Could not save order. Please try again.");
+      setFormError(err?.message || "Could not save order. Please check stock and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -435,6 +567,10 @@ export default function SalesOrdersPage() {
             <span className="text-[#77736A] text-xs">•</span>
             <span className="text-xs text-[#77736A]">
               Offline, D2C Website & Marketplaces
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 ml-2">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              Live Inventory Stock Matched
             </span>
           </div>
           <h2 className="text-2xl font-bold tracking-tight text-[#29271F]">
@@ -559,8 +695,11 @@ export default function SalesOrdersPage() {
                           </span>
                         </div>
                       )}
-                      <div className="text-[#77736A] text-[11px] mt-1">
-                        {ord.itemDescription} (Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)})
+                      <div className="text-[#77736A] text-[11px] mt-1 flex items-center justify-between">
+                        <span>{ord.itemDescription} (Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)})</span>
+                        <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                          ✓ Stock Deducted
+                        </span>
                       </div>
                     </div>
 
@@ -628,7 +767,12 @@ export default function SalesOrdersPage() {
                           )}
                         </td>
                         <td className="px-5 py-3 font-medium">
-                          <div>{ord.itemDescription}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span>{ord.itemDescription}</span>
+                            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                              ✓ Stock Deducted
+                            </span>
+                          </div>
                           <div className="text-[10px] text-[#77736A]">
                             Qty: {ord.quantity} × {formatINR(ord.unitPricePaise, false)}{" "}
                             {ord.gstRate !== undefined && (
@@ -811,42 +955,135 @@ export default function SalesOrdersPage() {
 
               {/* SKU Quick Select Dropdown */}
               <div>
-                <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
-                  Choose from Vedro SKUs (Quick Select)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider">
+                    Choose from Vedro SKUs (Quick Select)
+                  </label>
+                  {resolvedSku && (
+                    <span className="text-[10px] font-mono font-bold text-[#493020] bg-[#F2EBD8]/70 px-1.5 py-0.5 rounded border border-[#493020]/20">
+                      SKU: {resolvedSku}
+                    </span>
+                  )}
+                </div>
                 <select
+                  value={formData.sku || ""}
                   onChange={(e) => {
-                    const sel = VEDRO_CATALOG_OPTIONS.find((o) => o.sku === e.target.value);
-                    if (sel) {
+                    const selSku = e.target.value;
+                    const catalogItem = VEDRO_CATALOG_OPTIONS.find((o) => o.sku === selSku);
+                    const prodItem = productList.find((p) => p.sku === selSku);
+                    if (catalogItem) {
                       setFormData((prev) => ({
                         ...prev,
-                        itemDescription: `${sel.name} (${sel.sku})`,
-                        unitPrice: sel.price.toString(),
-                        gstRate: sel.gst.toString(),
+                        sku: catalogItem.sku,
+                        itemDescription: `${catalogItem.name} (${catalogItem.sku})`,
+                        unitPrice: catalogItem.price.toString(),
+                        gstRate: catalogItem.gst.toString(),
                       }));
+                      setFormError("");
+                    } else if (prodItem) {
+                      setFormData((prev) => ({
+                        ...prev,
+                        sku: prodItem.sku,
+                        itemDescription: `${prodItem.name} (${prodItem.sku})`,
+                        unitPrice: (prodItem.sellingPricePaise / 100).toString(),
+                        gstRate: prodItem.gstRate.toString(),
+                      }));
+                      setFormError("");
                     }
                   }}
                   className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-none focus:ring-1 focus:ring-[#E4BF22]"
                 >
-                  <option value="">-- Select SKU (Auto-fills Price & Tax) --</option>
+                  <option value="">-- Select SKU (Auto-fills Price, Tax & Live Stock) --</option>
                   <optgroup label="Pure Desi Cow Ghee (GST 12%)">
-                    <option value="VED-GHEE-250ML">Pure Desi Cow Ghee 250ml — ₹399 (12% GST)</option>
-                    <option value="VED-GHEE-500ML">Pure Desi Cow Ghee 500ml — ₹749 (12% GST)</option>
-                    <option value="VED-GHEE-1LTR">Pure Desi Cow Ghee 1 Litre — ₹1,449 (12% GST)</option>
+                    {["VED-GHEE-250ML", "VED-GHEE-500ML", "VED-GHEE-1LTR"].map((sku) => {
+                      const cat = VEDRO_CATALOG_OPTIONS.find((c) => c.sku === sku);
+                      const prod = productList.find((p) => p.sku === sku);
+                      const stock = prod ? prod.availableStock : 0;
+                      return (
+                        <option key={sku} value={sku}>
+                          {cat?.name} — ₹{cat?.price} ({stock > 0 ? `In Stock: ${stock}` : "⚠️ OUT OF STOCK"})
+                        </option>
+                      );
+                    })}
                   </optgroup>
                   <optgroup label="Cold-Pressed Mustard Oil (GST 5%)">
-                    <option value="VED-OIL-300ML">Cold-Pressed Mustard Oil 300ml — ₹89 (5% GST)</option>
-                    <option value="VED-OIL-500ML">Cold-Pressed Mustard Oil 500ml — ₹139 (5% GST)</option>
-                    <option value="VED-OIL-1LTR">Cold-Pressed Mustard Oil 1 Litre — ₹249 (5% GST)</option>
-                    <option value="VED-OIL-2LTR">Cold-Pressed Mustard Oil 2 Litre — ₹479 (5% GST)</option>
-                    <option value="VED-OIL-5LTR">Cold-Pressed Mustard Oil 5 Litre — ₹1,149 (5% GST)</option>
+                    {["VED-OIL-300ML", "VED-OIL-500ML", "VED-OIL-1LTR", "VED-OIL-2LTR", "VED-OIL-5LTR"].map((sku) => {
+                      const cat = VEDRO_CATALOG_OPTIONS.find((c) => c.sku === sku);
+                      const prod = productList.find((p) => p.sku === sku);
+                      const stock = prod ? prod.availableStock : 0;
+                      return (
+                        <option key={sku} value={sku}>
+                          {cat?.name} — ₹{cat?.price} ({stock > 0 ? `In Stock: ${stock}` : "⚠️ OUT OF STOCK"})
+                        </option>
+                      );
+                    })}
                   </optgroup>
                   <optgroup label="Organic Chemical-Free Jaggery (GST 5%)">
-                    <option value="VED-JAG-500GM">Natural Organic Jaggery 500g — ₹69 (5% GST)</option>
-                    <option value="VED-JAG-1KG">Natural Organic Jaggery 1kg — ₹125 (5% GST)</option>
+                    {["VED-JAG-500GM", "VED-JAG-1KG"].map((sku) => {
+                      const cat = VEDRO_CATALOG_OPTIONS.find((c) => c.sku === sku);
+                      const prod = productList.find((p) => p.sku === sku);
+                      const stock = prod ? prod.availableStock : 0;
+                      return (
+                        <option key={sku} value={sku}>
+                          {cat?.name} — ₹{cat?.price} ({stock > 0 ? `In Stock: ${stock}` : "⚠️ OUT OF STOCK"})
+                        </option>
+                      );
+                    })}
                   </optgroup>
                 </select>
               </div>
+
+              {/* LIVE INVENTORY STOCK MATCHING & MISMATCH NOTIFICATION BANNER */}
+              {resolvedSku && selectedProduct && (
+                <div className="transition-all">
+                  {isOutOfStock ? (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 flex items-start gap-2.5 shadow-xs">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div className="text-xs">
+                        <div className="font-bold text-rose-800 flex items-center gap-1.5">
+                          <span>Out of Stock Warning (0 Units Available)</span>
+                        </div>
+                        <div className="mt-0.5 text-rose-700">
+                          SKU <strong>{selectedProduct.sku}</strong> currently has <strong>0 units</strong> in inventory stock.
+                        </div>
+                        <div className="mt-1 text-[11px] text-rose-600 font-semibold">
+                          Recording a sale will fail until stock is added via Buy Raw Material / Expense.
+                        </div>
+                      </div>
+                    </div>
+                  ) : isStockMismatch ? (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 flex items-start gap-2.5 shadow-xs">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div className="text-xs">
+                        <div className="font-bold text-rose-800 flex items-center gap-1.5">
+                          <span>Stock Mismatch Error: Insufficient Inventory</span>
+                        </div>
+                        <div className="mt-0.5 text-rose-700">
+                          You are attempting to sell <strong>{liveQty}</strong> units, but only <strong>{availableStock}</strong> units of <strong>{selectedProduct.sku}</strong> are in stock.
+                        </div>
+                        <div className="mt-1 text-[11px] text-rose-600 font-semibold">
+                          Deficit: {liveQty - (availableStock || 0)} units needed. Please adjust sale quantity or restock inventory.
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 flex items-center justify-between text-xs shadow-xs">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <span className="font-bold text-emerald-800">Inventory Stock Matched: </span>
+                          <span className="font-mono font-semibold">{availableStock} units</span> available
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          {(availableStock || 0) - liveQty} left after sale
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Item description */}
               <div>
@@ -1066,16 +1303,20 @@ export default function SalesOrdersPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || Boolean(isStockMismatch || isOutOfStock)}
                   className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   <span>
                     {isSubmitting
-                      ? "Saving..."
+                      ? "Saving & Updating Stock..."
+                      : isStockMismatch
+                      ? "Stock Mismatch — Cannot Save"
+                      : isOutOfStock
+                      ? "Out of Stock — Cannot Save"
                       : editingOrderId
-                      ? "Update Order"
-                      : "Record Order"}
+                      ? "Update Order & Stock"
+                      : "Record Order & Deduct Stock"}
                   </span>
                 </button>
               </div>

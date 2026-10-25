@@ -6,7 +6,7 @@ import { MovementType, MovementStatus } from "@prisma/client";
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
 // Standard 10 Vedro Catalog SKUs fallback if database was freshly initialized
-const DEFAULT_CATALOG = [
+export const DEFAULT_CATALOG = [
   {
     sku: "VED-GHEE-250ML",
     name: "Pure A2 Desi Cow Bilona Ghee 250ml",
@@ -119,7 +119,7 @@ const DEFAULT_CATALOG = [
   },
 ];
 
-async function ensureDefaultProducts() {
+export async function ensureDefaultProducts() {
   const count = await prisma.product.count({
     where: { companyId: DEFAULT_COMPANY_ID },
   });
@@ -303,6 +303,78 @@ export async function POST(req: Request) {
   try {
     const session = await auth();
     const body = await req.json();
+
+    // 1. Handle Stock Movement (Inward, Purchase, Opening, Return, Wastage)
+    if (body.action === "movement") {
+      const {
+        productSku,
+        type = "PURCHASE",
+        quantity,
+        unitCostRupees,
+        supplierName,
+        invoiceRef,
+        batchNumber,
+        notes,
+      } = body;
+
+      const qty = parseInt(quantity);
+      if (isNaN(qty) || qty <= 0) {
+        return NextResponse.json({ error: "Invalid quantity for stock movement" }, { status: 400 });
+      }
+
+      const targetProduct = await prisma.product.findFirst({
+        where: {
+          companyId: DEFAULT_COMPANY_ID,
+          OR: [
+            { sku: { equals: productSku?.trim(), mode: "insensitive" } },
+            { name: { contains: productSku?.trim(), mode: "insensitive" } },
+          ],
+        },
+      });
+
+      if (!targetProduct) {
+        return NextResponse.json({ error: `Product with SKU "${productSku}" not found` }, { status: 404 });
+      }
+
+      let location = await prisma.inventoryLocation.findFirst({
+        where: { companyId: DEFAULT_COMPANY_ID },
+        select: { id: true },
+      });
+
+      if (!location) {
+        location = await prisma.inventoryLocation.create({
+          data: {
+            companyId: DEFAULT_COMPANY_ID,
+            name: "Main Storage Facility",
+            address: "Central Unit",
+            isActive: true,
+          },
+          select: { id: true },
+        });
+      }
+
+      const unitCost = parseFloat(unitCostRupees);
+      const unitCostPaise = !isNaN(unitCost) && unitCost > 0
+        ? Math.round(unitCost * 100)
+        : targetProduct.costPricePaise;
+
+      const movement = await prisma.inventoryMovement.create({
+        data: {
+          companyId: DEFAULT_COMPANY_ID,
+          productId: targetProduct.id,
+          locationId: location.id,
+          type: (type as MovementType) || MovementType.PURCHASE,
+          status: MovementStatus.APPROVED,
+          quantity: qty,
+          costPricePaise: unitCostPaise,
+          reference: invoiceRef || batchNumber || `STK-${Date.now().toString().slice(-6)}`,
+          reason: notes || (supplierName ? `Stock ${type} - ${supplierName}` : `Stock ${type}`),
+          createdBy: session?.user?.name || "Inventory Manager",
+        },
+      });
+
+      return NextResponse.json({ success: true, movement });
+    }
 
     const {
       sku,

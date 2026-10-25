@@ -1,8 +1,50 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { MovementType, MovementStatus } from "@prisma/client";
+import { DEFAULT_CATALOG, ensureDefaultProducts } from "../products/route";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
+
+async function getOrCreateLocation(): Promise<string> {
+  let location = await prisma.inventoryLocation.findFirst({
+    where: { companyId: DEFAULT_COMPANY_ID },
+    select: { id: true },
+  });
+  if (!location) {
+    location = await prisma.inventoryLocation.create({
+      data: {
+        companyId: DEFAULT_COMPANY_ID,
+        name: "Main Storage Facility",
+        address: "Central Unit",
+        isActive: true,
+      },
+      select: { id: true },
+    });
+  }
+  return location.id;
+}
+
+async function getProductAvailableStock(productId: string): Promise<number> {
+  const movements = await prisma.inventoryMovement.findMany({
+    where: {
+      companyId: DEFAULT_COMPANY_ID,
+      productId,
+      status: MovementStatus.APPROVED,
+    },
+    select: { type: true, quantity: true },
+  });
+
+  let stock = 0;
+  for (const m of movements) {
+    if (m.type === "PURCHASE" || m.type === "OPENING" || m.type === "RETURN") {
+      stock += m.quantity;
+    } else if (m.type === "SALE" || m.type === "WASTAGE") {
+      stock -= m.quantity;
+    }
+  }
+  return Math.max(0, stock);
+}
 
 export async function GET(req: Request) {
   try {
@@ -62,6 +104,7 @@ export async function GET(req: Request) {
         primaryLine?.product?.sku ||
         order.notes ||
         "Vedro Food Product";
+      const sku = primaryLine?.product?.sku || undefined;
       const qty = order.lines.reduce((acc, l) => acc + l.quantity, 0) || 1;
       const unitPrice = primaryLine ? primaryLine.unitPricePaise : order.subtotalPaise;
 
@@ -77,6 +120,7 @@ export async function GET(req: Request) {
         customerName: order.customer?.name || "Walk-in Retail Customer",
         customerPhone: order.customer?.phone || undefined,
         channel: order.channel?.name || "Offline / Direct Store",
+        sku,
         itemDescription: itemDesc,
         quantity: qty,
         unitPricePaise: unitPrice,
@@ -124,6 +168,7 @@ export async function POST(req: Request) {
       customerName,
       customerPhone,
       itemDescription,
+      sku: providedSku,
       quantity,
       unitPrice,
       discount,
@@ -168,8 +213,17 @@ export async function POST(req: Request) {
     const trimmedName = (customerName || "").trim();
     const trimmedPhone = (customerPhone || "").trim();
 
+    // Determine target SKU from providedSku or parsed from itemDescription
+    let targetSku = (providedSku || "").trim().toUpperCase();
+    if (!targetSku && itemDescription) {
+      const skuMatch = itemDescription.match(/VED-[A-Z0-9-]+/i);
+      if (skuMatch) {
+        targetSku = skuMatch[0].toUpperCase();
+      }
+    }
+
     // Run channel, customer check, and product lookups in parallel for maximum database speed
-    const [existingChannel, existingCustomer, product] = await Promise.all([
+    const [existingChannel, existingCustomer, initialProduct] = await Promise.all([
       prisma.salesChannel.findFirst({
         where: {
           companyId: DEFAULT_COMPANY_ID,
@@ -193,13 +247,82 @@ export async function POST(req: Request) {
         where: {
           companyId: DEFAULT_COMPANY_ID,
           OR: [
+            ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
             { sku: { contains: itemDescription, mode: "insensitive" } },
             { name: { contains: itemDescription, mode: "insensitive" } },
           ],
         },
-        select: { id: true, name: true, sku: true },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          costPricePaise: true,
+          sellingPricePaise: true,
+        },
       }),
     ]);
+
+    let product = initialProduct;
+
+    // Fallback: If product wasn't found in DB, ensure catalog products exist and re-query
+    if (!product) {
+      await ensureDefaultProducts();
+      product = await prisma.product.findFirst({
+        where: {
+          companyId: DEFAULT_COMPANY_ID,
+          OR: [
+            ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
+            { sku: { contains: itemDescription, mode: "insensitive" } },
+            { name: { contains: itemDescription, mode: "insensitive" } },
+          ],
+        },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          costPricePaise: true,
+          sellingPricePaise: true,
+        },
+      });
+    }
+
+    // Fallback if still not found: grab first active product
+    if (!product) {
+      product = await prisma.product.findFirst({
+        where: { companyId: DEFAULT_COMPANY_ID },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          costPricePaise: true,
+          sellingPricePaise: true,
+        },
+      });
+    }
+
+    // ---------------------------------------------------------
+    // CRITICAL STOCK & INVENTORY MATCHING VALIDATION:
+    // If a product is identified, check current available stock.
+    // Show error notification / 400 if requested quantity > stock!
+    // ---------------------------------------------------------
+    let availableStock = 0;
+    if (product) {
+      availableStock = await getProductAvailableStock(product.id);
+      if (qty > availableStock) {
+        return NextResponse.json(
+          {
+            error: `Stock Mismatch: Requested ${qty} units, but only ${availableStock} units of "${product.name}" (${product.sku}) are available in inventory. Please adjust order quantity or restock inventory first.`,
+            stockMismatch: true,
+            insufficientStock: true,
+            sku: product.sku,
+            productName: product.name,
+            availableStock,
+            requestedQuantity: qty,
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     // Fast channel resolution
     let channelId = existingChannel?.id;
@@ -251,59 +374,83 @@ export async function POST(req: Request) {
       }
     }
 
-    // Fallback product if needed
-    let resolvedProductId = product?.id;
-    if (!resolvedProductId) {
-      const fallbackProd = await prisma.product.findFirst({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: { id: true },
-      });
-      resolvedProductId = fallbackProd?.id;
-    }
-
     const orderNumber = `VED-OFF-${Date.now().toString().slice(-6)}`;
     const createdBy = session?.user?.name || "System";
+    const locationId = await getOrCreateLocation();
 
-    // Create Order and Line Items
-    const newOrder = await prisma.order.create({
-      data: {
-        companyId: DEFAULT_COMPANY_ID,
-        orderNumber,
-        channelId,
-        customerId,
-        date: new Date(date || Date.now()),
-        status: paymentStatus === "PAID" ? "FULFILLED" : "CONFIRMED",
-        subtotalPaise,
-        discountPaise,
-        taxPaise,
-        totalPaise,
-        notes: finalNotes,
-        createdBy,
-        ...(resolvedProductId
-          ? {
-              lines: {
-                create: [
-                  {
-                    productId: resolvedProductId,
-                    quantity: qty,
-                    unitPricePaise,
-                    discountPaise,
-                    taxableAmountPaise: taxablePaise,
-                    cgstPaise: Math.round(taxPaise / 2),
-                    sgstPaise: Math.round(taxPaise / 2),
-                    totalPaise,
-                  },
-                ],
-              },
-            }
-          : {}),
-      },
-      select: {
-        id: true,
-        orderNumber: true,
-        date: true,
-        totalPaise: true,
-      },
+    // ---------------------------------------------------------
+    // ATOMIC TRANSACTION:
+    // Create Order, OrderLine, AND InventoryMovement (MovementType.SALE)
+    // Automatically reducing the inventory stock for this SKU!
+    // ---------------------------------------------------------
+    const [newOrder, inventoryMovement] = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: {
+          companyId: DEFAULT_COMPANY_ID,
+          orderNumber,
+          channelId,
+          customerId,
+          date: new Date(date || Date.now()),
+          status: paymentStatus === "PAID" ? "FULFILLED" : "CONFIRMED",
+          subtotalPaise,
+          discountPaise,
+          taxPaise,
+          totalPaise,
+          notes: finalNotes,
+          createdBy,
+          ...(product
+            ? {
+                lines: {
+                  create: [
+                    {
+                      productId: product.id,
+                      quantity: qty,
+                      unitPricePaise,
+                      discountPaise,
+                      taxableAmountPaise: taxablePaise,
+                      cgstPaise: Math.round(taxPaise / 2),
+                      sgstPaise: Math.round(taxPaise / 2),
+                      totalPaise,
+                    },
+                  ],
+                },
+              }
+            : {}),
+        },
+        select: {
+          id: true,
+          orderNumber: true,
+          date: true,
+          totalPaise: true,
+        },
+      });
+
+      let movement = null;
+      if (product) {
+        movement = await tx.inventoryMovement.create({
+          data: {
+            companyId: DEFAULT_COMPANY_ID,
+            productId: product.id,
+            locationId,
+            type: MovementType.SALE,
+            status: MovementStatus.APPROVED,
+            quantity: qty,
+            costPricePaise: product.costPricePaise || 0,
+            orderId: order.id,
+            reference: order.orderNumber,
+            reason: `Sale Order ${order.orderNumber} (${trimmedName || "Walk-in Retail Customer"})`,
+            createdBy,
+          },
+          select: {
+            id: true,
+            quantity: true,
+            type: true,
+            status: true,
+          },
+        });
+      }
+
+      return [order, movement];
     });
 
     const responseOrder = {
@@ -313,6 +460,7 @@ export async function POST(req: Request) {
       customerName: trimmedName || "Walk-in Retail Customer",
       customerPhone: trimmedPhone || undefined,
       channel: existingChannel?.name || "Offline / Direct Store",
+      sku: product?.sku,
       itemDescription: itemDescription || product?.name || "Vedro Food Product",
       quantity: qty,
       unitPricePaise,
@@ -327,9 +475,19 @@ export async function POST(req: Request) {
         | "FULFILLED"
         | "CONFIRMED",
       notes: finalNotes || undefined,
+      remainingStock: product ? availableStock - qty : undefined,
     };
 
-    return NextResponse.json({ order: responseOrder }, { status: 201 });
+    return NextResponse.json(
+      {
+        order: responseOrder,
+        inventoryMovement,
+        message: product
+          ? `Sale recorded! Automatically deducted ${qty} units of ${product.sku} from inventory. Remaining stock: ${availableStock - qty}.`
+          : "Order recorded successfully.",
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Error creating order:", error);
     return NextResponse.json({ error: "Failed to record order" }, { status: 500 });
@@ -351,6 +509,7 @@ export async function PUT(req: Request) {
       customerName,
       customerPhone,
       itemDescription,
+      sku: providedSku,
       quantity,
       unitPrice,
       discount,
@@ -391,26 +550,95 @@ export async function PUT(req: Request) {
     const taxPaise = Math.round((taxablePaise * gstPct) / 100);
     const totalPaise = taxablePaise + taxPaise;
 
-    // Fetch existing order and product in parallel
-    const [existingOrder, product] = await Promise.all([
+    // Determine target SKU
+    let targetSku = (providedSku || "").trim().toUpperCase();
+    if (!targetSku && itemDescription) {
+      const skuMatch = itemDescription.match(/VED-[A-Z0-9-]+/i);
+      if (skuMatch) {
+        targetSku = skuMatch[0].toUpperCase();
+      }
+    }
+
+    // Fetch existing order, existing inventory movement, and product in parallel
+    const [existingOrder, existingMovement, initialProduct] = await Promise.all([
       prisma.order.findUnique({
         where: { id },
         select: { id: true, customerId: true, totalPaise: true, orderNumber: true },
+      }),
+      prisma.inventoryMovement.findFirst({
+        where: { orderId: id, type: MovementType.SALE },
+        select: { id: true, productId: true, quantity: true },
       }),
       prisma.product.findFirst({
         where: {
           companyId: DEFAULT_COMPANY_ID,
           OR: [
+            ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
             { sku: { contains: itemDescription, mode: "insensitive" } },
             { name: { contains: itemDescription, mode: "insensitive" } },
           ],
         },
-        select: { id: true, name: true, sku: true },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          costPricePaise: true,
+          sellingPricePaise: true,
+        },
       }),
     ]);
 
     if (!existingOrder) {
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    }
+
+    let product = initialProduct;
+    if (!product) {
+      await ensureDefaultProducts();
+      product = await prisma.product.findFirst({
+        where: {
+          companyId: DEFAULT_COMPANY_ID,
+          OR: [
+            ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
+            { sku: { contains: itemDescription, mode: "insensitive" } },
+            { name: { contains: itemDescription, mode: "insensitive" } },
+          ],
+        },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          costPricePaise: true,
+          sellingPricePaise: true,
+        },
+      });
+    }
+
+    // ---------------------------------------------------------
+    // STOCK VALIDATION ON UPDATE:
+    // Headroom = current available stock + previously reserved qty for this order
+    // ---------------------------------------------------------
+    let availableHeadroom = 0;
+    if (product) {
+      const currentStock = await getProductAvailableStock(product.id);
+      const existingMovementQty =
+        existingMovement && existingMovement.productId === product.id ? existingMovement.quantity : 0;
+      availableHeadroom = currentStock + existingMovementQty;
+
+      if (qty > availableHeadroom) {
+        return NextResponse.json(
+          {
+            error: `Stock Mismatch: Updated quantity of ${qty} units exceeds available stock of ${availableHeadroom} units for "${product.name}" (${product.sku}).`,
+            stockMismatch: true,
+            insufficientStock: true,
+            sku: product.sku,
+            productName: product.name,
+            availableStock: availableHeadroom,
+            requestedQuantity: qty,
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Adjust customer lifetime spend difference asynchronously
@@ -424,19 +652,12 @@ export async function PUT(req: Request) {
         .catch((err) => console.error("Error updating customer diff:", err));
     }
 
-    let resolvedProductId = product?.id;
-    if (!resolvedProductId) {
-      const fallbackProd = await prisma.product.findFirst({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: { id: true },
-      });
-      resolvedProductId = fallbackProd?.id;
-    }
+    const locationId = await getOrCreateLocation();
 
-    // Delete existing lines and update order in a single transaction
-    await prisma.$transaction([
-      prisma.orderLine.deleteMany({ where: { orderId: id } }),
-      prisma.order.update({
+    // Delete existing lines and update order & inventory movement in a single transaction
+    await prisma.$transaction(async (tx) => {
+      await tx.orderLine.deleteMany({ where: { orderId: id } });
+      await tx.order.update({
         where: { id },
         data: {
           date: new Date(date || Date.now()),
@@ -446,12 +667,12 @@ export async function PUT(req: Request) {
           taxPaise,
           totalPaise,
           notes: finalNotes,
-          ...(resolvedProductId
+          ...(product
             ? {
                 lines: {
                   create: [
                     {
-                      productId: resolvedProductId,
+                      productId: product.id,
                       quantity: qty,
                       unitPricePaise,
                       discountPaise,
@@ -466,8 +687,39 @@ export async function PUT(req: Request) {
             : {}),
         },
         select: { id: true },
-      }),
-    ]);
+      });
+
+      if (product) {
+        if (existingMovement) {
+          await tx.inventoryMovement.update({
+            where: { id: existingMovement.id },
+            data: {
+              productId: product.id,
+              quantity: qty,
+              reference: existingOrder.orderNumber,
+              costPricePaise: product.costPricePaise || 0,
+              reason: `Updated Sale Order ${existingOrder.orderNumber}`,
+            },
+          });
+        } else {
+          await tx.inventoryMovement.create({
+            data: {
+              companyId: DEFAULT_COMPANY_ID,
+              productId: product.id,
+              locationId,
+              type: MovementType.SALE,
+              status: MovementStatus.APPROVED,
+              quantity: qty,
+              costPricePaise: product.costPricePaise || 0,
+              orderId: id,
+              reference: existingOrder.orderNumber,
+              reason: `Sale Order ${existingOrder.orderNumber}`,
+              createdBy: session?.user?.name || "System",
+            },
+          });
+        }
+      }
+    });
 
     const responseOrder = {
       id: existingOrder.id,
@@ -476,6 +728,7 @@ export async function PUT(req: Request) {
       customerName: (customerName || "").trim() || "Walk-in Retail Customer",
       customerPhone: (customerPhone || "").trim() || undefined,
       channel: "Offline / Direct Store",
+      sku: product?.sku,
       itemDescription: itemDescription || product?.name || "Vedro Food Product",
       quantity: qty,
       unitPricePaise,
@@ -490,9 +743,13 @@ export async function PUT(req: Request) {
         | "FULFILLED"
         | "CONFIRMED",
       notes: finalNotes || undefined,
+      remainingStock: product ? availableHeadroom - qty : undefined,
     };
 
-    return NextResponse.json({ order: responseOrder });
+    return NextResponse.json({
+      order: responseOrder,
+      message: `Order ${existingOrder.orderNumber} updated! Inventory stock adjusted to ${qty} units.`,
+    });
   } catch (error) {
     console.error("Error updating order:", error);
     return NextResponse.json({ error: "Failed to update order" }, { status: 500 });
@@ -520,7 +777,7 @@ export async function DELETE(req: Request) {
 
     const existingOrder = await prisma.order.findUnique({
       where: { id },
-      select: { id: true, customerId: true, totalPaise: true },
+      select: { id: true, customerId: true, totalPaise: true, orderNumber: true },
     });
 
     if (!existingOrder) {
@@ -540,13 +797,22 @@ export async function DELETE(req: Request) {
         .catch((err) => console.error("Error decrementing customer stats:", err));
     }
 
-    // Delete lines & order in a transaction
+    // ---------------------------------------------------------
+    // RESTORE STOCK:
+    // Delete any associated InventoryMovement (MovementType.SALE)
+    // and delete order lines & order in a single transaction
+    // ---------------------------------------------------------
     await prisma.$transaction([
+      prisma.inventoryMovement.deleteMany({ where: { orderId: id } }),
       prisma.orderLine.deleteMany({ where: { orderId: id } }),
       prisma.order.delete({ where: { id }, select: { id: true } }),
     ]);
 
-    return NextResponse.json({ success: true, deletedId: id });
+    return NextResponse.json({
+      success: true,
+      deletedId: id,
+      message: `Order ${existingOrder.orderNumber} deleted. Stock restored to inventory.`,
+    });
   } catch (error) {
     console.error("Error deleting order:", error);
     return NextResponse.json({ error: "Failed to delete order" }, { status: 500 });
