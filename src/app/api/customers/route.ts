@@ -195,3 +195,104 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Failed to create customer" }, { status: 500 });
   }
 }
+
+export async function PUT(req: Request) {
+  try {
+    const session = await auth();
+    const body = await req.json();
+    const { id, name, phone, email, city, source, notes } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: "Customer ID is required" }, { status: 400 });
+    }
+
+    const trimmedName = (name || "").trim();
+    const trimmedPhone = (phone || "").trim();
+
+    if (!trimmedName) {
+      return NextResponse.json({ error: "Customer name is required" }, { status: 400 });
+    }
+    if (!trimmedPhone) {
+      return NextResponse.json({ error: "Customer phone is required" }, { status: 400 });
+    }
+
+    const updated = await prisma.customer.update({
+      where: { id },
+      data: {
+        name: trimmedName,
+        phone: trimmedPhone,
+        email: email !== undefined ? (email?.trim() || null) : undefined,
+        city: city !== undefined ? (city?.trim() || null) : undefined,
+        source: source !== undefined ? (source?.trim() || "Retail Walk-in") : undefined,
+        notes: notes !== undefined ? (notes?.trim() || null) : undefined,
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        city: true,
+        source: true,
+        orderCount: true,
+        totalSpentPaise: true,
+        createdAt: true,
+        notes: true,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      customer: {
+        id: updated.id,
+        name: updated.name,
+        phone: updated.phone || "",
+        email: updated.email || undefined,
+        city: updated.city || undefined,
+        source: updated.source,
+        orderCount: updated.orderCount,
+        totalSpentPaise: updated.totalSpentPaise,
+        createdAt: updated.createdAt.toISOString(),
+        notes: updated.notes || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating customer:", error);
+    return NextResponse.json({ error: "Failed to update customer" }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const session = await auth();
+    const { searchParams } = new URL(req.url);
+    let id = searchParams.get("id");
+
+    if (!id) {
+      const body = await req.json().catch(() => ({}));
+      id = body?.id;
+    }
+
+    if (!id) {
+      return NextResponse.json({ error: "Customer ID is required" }, { status: 400 });
+    }
+
+    // Safely unlink orders if any to preserve order history
+    await prisma.order.updateMany({
+      where: { customerId: id },
+      data: { customerId: null },
+    });
+
+    // Delete customer
+    await prisma.customer.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: "Customer deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting customer:", error);
+    return NextResponse.json({ error: "Failed to delete customer" }, { status: 500 });
+  }
+}

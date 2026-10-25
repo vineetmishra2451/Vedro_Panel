@@ -20,6 +20,7 @@ import {
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { formatINR, formatDate, rupeesToPaise } from "@/lib/format";
+import { getCachedData, setCachedData } from "@/lib/cache";
 
 interface CapitalEntry {
   id: string;
@@ -54,11 +55,36 @@ export default function PartnersPage() {
     notes: "",
   });
 
+  const [submitting, setSubmitting] = useState(false);
+
+  // Immediately hydrate from cache, then fetch fresh entries from backend
   useEffect(() => {
     setFormData((prev) => ({
       ...prev,
       date: new Date().toISOString().split("T")[0],
     }));
+
+    const cachedPartners = getCachedData<any>("partners");
+    if (cachedPartners && Array.isArray(cachedPartners.entries)) {
+      setEntries(cachedPartners.entries);
+    }
+
+    const loadPartners = async () => {
+      try {
+        const res = await fetch("/api/partners");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.entries)) {
+            setEntries(data.entries);
+          }
+          setCachedData("partners", data);
+        }
+      } catch (err) {
+        console.error("Failed to load partner capital entries:", err);
+      }
+    };
+
+    loadPartners();
   }, []);
 
   const [formError, setFormError] = useState("");
@@ -87,7 +113,7 @@ export default function PartnersPage() {
 
   const totalCapitalPaise = partnerStats.reduce((acc, p) => acc + p.netBalance, 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
@@ -105,37 +131,71 @@ export default function PartnersPage() {
     const isNegative = formData.type === "WITHDRAWAL" || formData.type === "LOAN_REPAYMENT";
     const amountPaise = rupeesToPaise(rupees) * (isNegative ? -1 : 1);
 
-    const newEntry: CapitalEntry = {
-      id: `cap-${Date.now()}`,
-      partnerName: formData.partnerName,
-      date: formData.date,
-      amountPaise,
-      type: formData.type,
-      reason: formData.reason.trim(),
-      paymentMethod: formData.paymentMethod,
-      reference: formData.reference.trim(),
-      notes: formData.notes.trim(),
-      createdAt: new Date().toISOString(),
-    };
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/partners", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partnerName: formData.partnerName,
+          date: formData.date,
+          amountRupees: formData.amountRupees,
+          type: formData.type,
+          reason: formData.reason,
+          paymentMethod: formData.paymentMethod,
+          reference: formData.reference,
+          notes: formData.notes,
+        }),
+      });
 
-    setEntries([newEntry, ...entries]);
-    setIsModalOpen(false);
-    setSuccessMessage(
-      `Capital entry of ${formatINR(Math.abs(amountPaise))} recorded for ${formData.partnerName}!`
-    );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to record capital entry");
+      }
 
-    setFormData({
-      partnerName: "Vivek",
-      date: new Date().toISOString().split("T")[0],
-      amountRupees: "",
-      type: "CAPITAL_INTRODUCED",
-      reason: "",
-      paymentMethod: "BANK_TRANSFER",
-      reference: "",
-      notes: "",
-    });
+      const data = await res.json();
+      const newEntry: CapitalEntry = {
+        id: data.entry?.id || `cap-${Date.now()}`,
+        partnerName: formData.partnerName,
+        date: formData.date,
+        amountPaise,
+        type: formData.type,
+        reason: formData.reason.trim(),
+        paymentMethod: formData.paymentMethod,
+        reference: formData.reference.trim() || data.entry?.reference || "",
+        notes: formData.notes.trim() || undefined,
+        createdAt: new Date().toISOString(),
+      };
 
-    setTimeout(() => setSuccessMessage(""), 5000);
+      const updatedEntries = [newEntry, ...entries];
+      setEntries(updatedEntries);
+      setCachedData("partners", {
+        entries: updatedEntries,
+      });
+
+      setIsModalOpen(false);
+      setSuccessMessage(
+        `Capital entry of ${formatINR(Math.abs(amountPaise))} recorded for ${formData.partnerName}!`
+      );
+
+      setFormData({
+        partnerName: "Vivek",
+        date: new Date().toISOString().split("T")[0],
+        amountRupees: "",
+        type: "CAPITAL_INTRODUCED",
+        reason: "",
+        paymentMethod: "BANK_TRANSFER",
+        reference: "",
+        notes: "",
+      });
+
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Capital entry error:", err);
+      setFormError(err.message || "Failed to record capital entry");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const filteredEntries = entries.filter((e) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Landmark,
   Plus,
@@ -20,10 +20,14 @@ import {
   Building,
   CreditCard,
   Layers,
+  Boxes,
+  Loader2,
+  Users2,
 } from "lucide-react";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { formatINR, formatDate, rupeesToPaise } from "@/lib/format";
+import { getCachedData, setCachedData, clearCachedData } from "@/lib/cache";
 
 interface AccountItem {
   code: string;
@@ -90,17 +94,76 @@ export default function FinancePage() {
   const [activeTab, setActiveTab] = useState<"accounts" | "journals" | "reconciliation">("accounts");
   const [accounts, setAccounts] = useState<AccountItem[]>(INITIAL_ACCOUNTS);
   const [journals, setJournals] = useState<JournalRecord[]>([]);
+  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedJournalDrawer, setSelectedJournalDrawer] = useState<JournalRecord | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showInfoBanner, setShowInfoBanner] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // Modal mode: "quick_expense" for user-friendly raw material/goods buying vs "manual_journal" for full double-entry
   const [modalMode, setModalMode] = useState<"quick_expense" | "manual_journal">("quick_expense");
 
+  // Hydrate from client cache immediately, then fetch backend in background (stale-while-revalidate)
+  useEffect(() => {
+    // 1. Instant hydration
+    const cachedExpenses = getCachedData<any>("expenses");
+    if (cachedExpenses) {
+      if (Array.isArray(cachedExpenses.journals) && cachedExpenses.journals.length > 0) {
+        setJournals(cachedExpenses.journals);
+      }
+      if (Array.isArray(cachedExpenses.accounts) && cachedExpenses.accounts.length > 0) {
+        setAccounts(cachedExpenses.accounts);
+      }
+    }
+
+    const cachedProducts = getCachedData<any[]>("products");
+    if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+      setAvailableProducts(cachedProducts);
+    }
+
+    // 2. Fetch fresh expenses & accounts from database
+    const loadExpenses = async () => {
+      try {
+        const res = await fetch("/api/expenses?limit=100");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.journals)) {
+            setJournals(data.journals);
+          }
+          if (Array.isArray(data.accounts) && data.accounts.length > 0) {
+            setAccounts(data.accounts);
+          }
+          setCachedData("expenses", data);
+        }
+      } catch (err) {
+        console.error("Failed to load expenses:", err);
+      }
+    };
+
+    // 3. Fetch products catalog for the SKU selector
+    const loadProducts = async () => {
+      try {
+        const res = await fetch("/api/products");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.products)) {
+            setAvailableProducts(data.products);
+            setCachedData("products", data.products);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load products for inventory linkage:", err);
+      }
+    };
+
+    loadExpenses();
+    loadProducts();
+  }, []);
+
   // React to ?action=new-entry or quick URL actions
-  React.useEffect(() => {
+  useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       if (params.get("action") === "new-entry") {
@@ -112,15 +175,21 @@ export default function FinancePage() {
 
   // --- Quick Expense / Purchase Form State ---
   const [quickForm, setQuickForm] = useState({
-    date: "2026-04-15",
-    expenseType: "raw_materials", // raw_materials, packaging, finished_goods, freight, marketing, general
+    date: new Date().toISOString().split("T")[0],
+    expenseType: "raw_materials_direct", // raw_materials_direct, packaging, finished_goods, freight, marketing, general
     customDebitAccount: "5050",
     supplierName: "",
     invoiceRef: "",
     paymentAccount: "1000", // 1000 Bank, 1010 Cash, 1020 UPI, 2000 Accounts Payable (Credit)
+    paidByPartner: "", // "" | "Vivek" | "Vineet" | "Varunesh"
     amountRupees: "",
     taxSlab: "5", // 0, 5, 12, 18
     narration: "",
+    // Inventory SKU Linkage
+    sku: "",
+    quantity: "",
+    unitCostRupees: "",
+    updateInventory: true,
   });
 
   // --- Manual Journal Form State ---
@@ -180,7 +249,16 @@ export default function FinancePage() {
   // Quick form calculations
   const quickAmount = parseFloat(quickForm.amountRupees) || 0;
   const quickDebitInfo = getDebitAccountForExpenseType(quickForm.expenseType);
-  const quickCreditName = getAccountName(quickForm.paymentAccount);
+  const quickCreditCode = quickForm.paidByPartner
+    ? quickForm.paidByPartner === "Vivek"
+      ? "3010"
+      : quickForm.paidByPartner === "Vineet"
+      ? "3020"
+      : "3030"
+    : quickForm.paymentAccount;
+  const quickCreditName = quickForm.paidByPartner
+    ? `Partner Capital - ${quickForm.paidByPartner} (Equity)`
+    : getAccountName(quickForm.paymentAccount);
 
   // Manual form calculations
   const totalDebit = manualLines
@@ -236,7 +314,7 @@ export default function FinancePage() {
   };
 
   // Submit Quick Expense Entry
-  const handleQuickSubmit = (e: React.FormEvent) => {
+  const handleQuickSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
@@ -250,89 +328,170 @@ export default function FinancePage() {
       return;
     }
 
-    const narration =
-      quickForm.narration.trim() ||
-      `${quickDebitInfo.name} from ${quickForm.supplierName || "Vendor"} (Ref: ${
-        quickForm.invoiceRef || "Direct"
-      })`;
+    if (quickForm.sku && (!quickForm.quantity || parseInt(quickForm.quantity) <= 0)) {
+      setFormError("Please enter a valid quantity bought for the selected SKU.");
+      return;
+    }
 
-    const refNumber = quickForm.invoiceRef.trim() || `EXP-${Date.now().toString().slice(-6)}`;
-    const amountPaise = rupeesToPaise(quickAmount);
+    setSubmitting(true);
+    try {
+      const narration =
+        quickForm.narration.trim() ||
+        `${quickDebitInfo.name} from ${quickForm.supplierName || "Vendor"} (Ref: ${
+          quickForm.invoiceRef || "Direct"
+        })${quickForm.sku ? ` [SKU: ${quickForm.sku}, Qty: ${quickForm.quantity}]` : ""}`;
 
-    const newJournal: JournalRecord = {
-      id: `jrn-${Date.now()}`,
-      date: quickForm.date,
-      reference: refNumber,
-      narration,
-      category: quickDebitInfo.name,
-      supplierName: quickForm.supplierName.trim() || undefined,
-      totalPaise: amountPaise,
-      status: "POSTED",
-      lines: [
-        {
-          accountCode: quickDebitInfo.code,
-          accountName: quickDebitInfo.name,
-          type: "DEBIT",
-          amountPaise,
-          memo: `Expense/Purchase: ${quickForm.supplierName || "Vendor"}`,
-        },
-        {
-          accountCode: quickForm.paymentAccount,
-          accountName: quickCreditName,
-          type: "CREDIT",
-          amountPaise,
-          memo: quickForm.paymentAccount === "2000" ? "Supplier credit payable" : "Settled via payment",
-        },
-      ],
-      createdBy: "Vineet Mishra (Partner / Finance)",
-      createdAt: new Date().toISOString(),
-    };
+      const res = await fetch("/api/expenses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: quickForm.date,
+          expenseType: quickForm.expenseType,
+          customDebitAccount: quickDebitInfo.code,
+          supplierName: quickForm.supplierName,
+          invoiceRef: quickForm.invoiceRef,
+          paymentAccount: quickForm.paidByPartner ? undefined : quickForm.paymentAccount,
+          paidByPartner: quickForm.paidByPartner || undefined,
+          amountRupees: quickForm.amountRupees,
+          taxSlab: quickForm.taxSlab,
+          narration,
+          sku: quickForm.sku || undefined,
+          quantity: quickForm.sku ? parseInt(quickForm.quantity) : undefined,
+          unitCostRupees: quickForm.unitCostRupees || undefined,
+          updateInventory: quickForm.updateInventory,
+        }),
+      });
 
-    // Update Account Balances in ledger
-    setAccounts((prevAccounts) =>
-      prevAccounts.map((acc) => {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to record expense");
+      }
+
+      const data = await res.json();
+      const refNumber = data.reference || quickForm.invoiceRef || `EXP-${Date.now().toString().slice(-6)}`;
+      const amountPaise = rupeesToPaise(quickAmount);
+
+      const newJournal: JournalRecord = {
+        id: data.transaction?.id || `jrn-${Date.now()}`,
+        date: quickForm.date,
+        reference: refNumber,
+        narration,
+        category: quickDebitInfo.name,
+        supplierName: quickForm.supplierName.trim() || undefined,
+        totalPaise: amountPaise,
+        status: "POSTED",
+        lines: [
+          {
+            accountCode: quickDebitInfo.code,
+            accountName: quickDebitInfo.name,
+            type: "DEBIT",
+            amountPaise,
+            memo: `Expense/Purchase: ${quickForm.supplierName || "Vendor"}`,
+          },
+          {
+            accountCode: quickCreditCode,
+            accountName: quickCreditName,
+            type: "CREDIT",
+            amountPaise,
+            memo: quickForm.paidByPartner
+              ? `Paid by Partner ${quickForm.paidByPartner} (Added to Capital)`
+              : quickForm.paymentAccount === "2000"
+              ? "Supplier credit payable"
+              : "Settled via payment",
+          },
+        ],
+        createdBy: "Finance Manager",
+        createdAt: new Date().toISOString(),
+      };
+
+      // Update Account Balances in ledger
+      const updatedAccounts = accounts.map((acc) => {
         if (acc.code === quickDebitInfo.code) {
-          // Debit increases ASSET or EXPENSE
           return { ...acc, balancePaise: acc.balancePaise + amountPaise };
         }
-        if (acc.code === quickForm.paymentAccount) {
+        if (acc.code === quickCreditCode) {
           if (acc.type === "LIABILITY" || acc.type === "EQUITY") {
-            // Credit increases Liability (e.g. Accounts Payable)
             return { ...acc, balancePaise: acc.balancePaise + amountPaise };
           } else {
-            // Credit decreases Asset (e.g. Bank/Cash outflow)
             return { ...acc, balancePaise: acc.balancePaise - amountPaise };
           }
         }
         return acc;
-      })
-    );
+      });
 
-    setJournals([newJournal, ...journals]);
-    setIsModalOpen(false);
-    setActiveTab("journals");
-    setSuccessMessage(
-      `Journal ${newJournal.reference} posted successfully! Debits (₹${quickAmount.toLocaleString(
-        "en-IN"
-      )}) equal Credits.`
-    );
+      const updatedJournals = [newJournal, ...journals];
+      setAccounts(updatedAccounts);
+      setJournals(updatedJournals);
 
-    // Reset quick form
-    setQuickForm({
-      date: "2026-04-15",
-      expenseType: "raw_materials_direct",
-      customDebitAccount: "5050",
-      supplierName: "",
-      invoiceRef: "",
-      paymentAccount: "1000",
-      amountRupees: "",
-      taxSlab: "5",
-      narration: "",
-    });
+      // Save to client cache
+      setCachedData("expenses", {
+        journals: updatedJournals,
+        accounts: updatedAccounts,
+      });
+
+      // Clear/refresh products and partners cache so Overview and Partners pages immediately reflect
+      clearCachedData("products");
+      if (quickForm.paidByPartner) {
+        clearCachedData("partners");
+      }
+
+      // Also update local availableProducts if SKU was restocked
+      if (quickForm.sku && quickForm.quantity) {
+        const addedQty = parseInt(quickForm.quantity);
+        setAvailableProducts((prev) =>
+          prev.map((p) =>
+            p.sku === quickForm.sku
+              ? {
+                  ...p,
+                  availableStock: p.availableStock + addedQty,
+                  valuationPaise: (p.availableStock + addedQty) * p.costPricePaise,
+                }
+              : p
+          )
+        );
+      }
+
+      setIsModalOpen(false);
+      setActiveTab("journals");
+      setSuccessMessage(
+        `Purchase Voucher ${refNumber} posted successfully!${
+          quickForm.paidByPartner
+            ? ` Credited ₹${quickAmount.toLocaleString("en-IN")} to ${quickForm.paidByPartner}'s partner capital.`
+            : ""
+        }${
+          quickForm.sku && quickForm.quantity
+            ? ` Auto-updated inventory: +${quickForm.quantity} units of ${quickForm.sku}.`
+            : ""
+        }`
+      );
+
+      // Reset quick form
+      setQuickForm({
+        date: new Date().toISOString().split("T")[0],
+        expenseType: "raw_materials_direct",
+        customDebitAccount: "5050",
+        supplierName: "",
+        invoiceRef: "",
+        paymentAccount: "1000",
+        paidByPartner: "",
+        amountRupees: "",
+        taxSlab: "5",
+        narration: "",
+        sku: "",
+        quantity: "",
+        unitCostRupees: "",
+        updateInventory: true,
+      });
+    } catch (err: any) {
+      console.error("Expense submit error:", err);
+      setFormError(err.message || "Failed to post expense entry.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // Submit Manual Double-Entry Journal
-  const handleManualSubmit = (e: React.FormEvent) => {
+  const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
@@ -351,85 +510,115 @@ export default function FinancePage() {
       return;
     }
 
-    const refNumber = manualRef.trim() || `JRN-${Date.now().toString().slice(-6)}`;
-    const totalPaise = rupeesToPaise(totalDebit);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/expenses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: manualDate,
+          invoiceRef: manualRef,
+          narration: manualNarration,
+          lines: manualLines,
+        }),
+      });
 
-    const formattedLines = manualLines.map((l) => ({
-      accountCode: l.accountCode,
-      accountName: l.accountName,
-      type: l.type,
-      amountPaise: rupeesToPaise(parseFloat(l.amountRupees) || 0),
-      memo: l.memo.trim() || undefined,
-    }));
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to record manual journal");
+      }
 
-    const newJournal: JournalRecord = {
-      id: `jrn-${Date.now()}`,
-      date: manualDate,
-      reference: refNumber,
-      narration: manualNarration.trim(),
-      totalPaise,
-      status: "POSTED",
-      lines: formattedLines,
-      createdBy: "Vineet Mishra (Partner / Finance)",
-      createdAt: new Date().toISOString(),
-    };
+      const data = await res.json();
+      const refNumber = data.reference || manualRef.trim() || `JRN-${Date.now().toString().slice(-6)}`;
+      const totalPaise = rupeesToPaise(totalDebit);
 
-    // Update balances
-    setAccounts((prevAccounts) => {
-      const updated = [...prevAccounts];
+      const formattedLines = manualLines.map((l) => ({
+        accountCode: l.accountCode,
+        accountName: l.accountName,
+        type: l.type,
+        amountPaise: rupeesToPaise(parseFloat(l.amountRupees) || 0),
+        memo: l.memo.trim() || undefined,
+      }));
+
+      const newJournal: JournalRecord = {
+        id: data.transaction?.id || `jrn-${Date.now()}`,
+        date: manualDate,
+        reference: refNumber,
+        narration: manualNarration.trim(),
+        totalPaise,
+        status: "POSTED",
+        lines: formattedLines,
+        createdBy: "Finance Manager",
+        createdAt: new Date().toISOString(),
+      };
+
+      // Update balances
+      const updatedAccounts = [...accounts];
       formattedLines.forEach((line) => {
-        const idx = updated.findIndex((a) => a.code === line.accountCode);
+        const idx = updatedAccounts.findIndex((a) => a.code === line.accountCode);
         if (idx !== -1) {
-          const acc = updated[idx];
+          const acc = updatedAccounts[idx];
           if (line.type === "DEBIT") {
             if (acc.type === "ASSET" || acc.type === "EXPENSE") {
-              updated[idx] = { ...acc, balancePaise: acc.balancePaise + line.amountPaise };
+              updatedAccounts[idx] = { ...acc, balancePaise: acc.balancePaise + line.amountPaise };
             } else {
-              updated[idx] = { ...acc, balancePaise: acc.balancePaise - line.amountPaise };
+              updatedAccounts[idx] = { ...acc, balancePaise: acc.balancePaise - line.amountPaise };
             }
           } else {
             // CREDIT
             if (acc.type === "LIABILITY" || acc.type === "EQUITY" || acc.type === "REVENUE") {
-              updated[idx] = { ...acc, balancePaise: acc.balancePaise + line.amountPaise };
+              updatedAccounts[idx] = { ...acc, balancePaise: acc.balancePaise + line.amountPaise };
             } else {
-              updated[idx] = { ...acc, balancePaise: acc.balancePaise - line.amountPaise };
+              updatedAccounts[idx] = { ...acc, balancePaise: acc.balancePaise - line.amountPaise };
             }
           }
         }
       });
-      return updated;
-    });
 
-    setJournals([newJournal, ...journals]);
-    setIsModalOpen(false);
-    setActiveTab("journals");
-    setSuccessMessage(
-      `Balanced double-entry journal ${newJournal.reference} posted successfully (₹${totalDebit.toLocaleString(
-        "en-IN"
-      )}).`
-    );
+      const updatedJournals = [newJournal, ...journals];
+      setAccounts(updatedAccounts);
+      setJournals(updatedJournals);
 
-    // Reset manual form
-    setManualRef("");
-    setManualNarration("");
-    setManualLines([
-      {
-        id: "line-1",
-        accountCode: "5050",
-        accountName: getAccountName("5050"),
-        type: "DEBIT",
-        amountRupees: "",
-        memo: "Raw material procurement",
-      },
-      {
-        id: "line-2",
-        accountCode: "1000",
-        accountName: getAccountName("1000"),
-        type: "CREDIT",
-        amountRupees: "",
-        memo: "Bank transfer payment",
-      },
-    ]);
+      setCachedData("expenses", {
+        journals: updatedJournals,
+        accounts: updatedAccounts,
+      });
+
+      setIsModalOpen(false);
+      setActiveTab("journals");
+      setSuccessMessage(
+        `Balanced double-entry journal ${newJournal.reference} posted successfully (₹${totalDebit.toLocaleString(
+          "en-IN"
+        )}).`
+      );
+
+      // Reset manual form
+      setManualRef("");
+      setManualNarration("");
+      setManualLines([
+        {
+          id: "line-1",
+          accountCode: "5050",
+          accountName: getAccountName("5050"),
+          type: "DEBIT",
+          amountRupees: "",
+          memo: "Raw material procurement",
+        },
+        {
+          id: "line-2",
+          accountCode: "1000",
+          accountName: getAccountName("1000"),
+          type: "CREDIT",
+          amountRupees: "",
+          memo: "Bank transfer payment",
+        },
+      ]);
+    } catch (err: any) {
+      console.error("Manual journal error:", err);
+      setFormError(err.message || "Failed to post manual journal.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const filteredJournals = journals.filter(
@@ -894,6 +1083,146 @@ export default function FinancePage() {
                   </div>
                 </div>
 
+                {/* Inventory SKU Linkage Section */}
+                <div className="p-3 bg-[#FCFAF3] rounded-xl border border-[#E8E2D5] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Boxes className="w-4 h-4 text-[#493020]" />
+                      <label className="text-xs font-bold text-[#493020]">
+                        Link to Product SKU / Stock Restock (Optional)
+                      </label>
+                    </div>
+                    <span className="text-[10px] text-[#77736A]">
+                      Auto-increments inventory & stock value
+                    </span>
+                  </div>
+
+                  <div>
+                    <select
+                      value={quickForm.sku}
+                      onChange={(e) => {
+                        const selectedSku = e.target.value;
+                        const foundProd = availableProducts.find((p) => p.sku === selectedSku);
+                        const unitCost = foundProd ? (foundProd.costPricePaise / 100).toString() : "";
+                        setQuickForm((prev) => {
+                          const next = { ...prev, sku: selectedSku };
+                          if (foundProd) {
+                            next.unitCostRupees = unitCost;
+                            if (next.quantity) {
+                              const total = (parseFloat(next.quantity) * parseFloat(unitCost)).toFixed(2);
+                              if (!isNaN(parseFloat(total)) && parseFloat(total) > 0) {
+                                next.amountRupees = total;
+                              }
+                            }
+                          }
+                          return next;
+                        });
+                      }}
+                      className="w-full px-3 py-1.5 bg-white border border-[#E8E2D5] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#E4BF22]"
+                    >
+                      <option value="">-- No Product SKU (General Raw Material / Non-SKU Bill) --</option>
+                      <optgroup label="Dairy & Clarified Butter (Ghee)">
+                        <option value="VED-GHEE-250ML">Pure A2 Desi Cow Bilona Ghee 250ml (VED-GHEE-250ML)</option>
+                        <option value="VED-GHEE-500ML">Pure A2 Desi Cow Bilona Ghee 500ml (VED-GHEE-500ML)</option>
+                        <option value="VED-GHEE-1LTR">Pure A2 Desi Cow Bilona Ghee 1 Litre (VED-GHEE-1LTR)</option>
+                      </optgroup>
+                      <optgroup label="Edible Oils & Fats (Mustard Oil)">
+                        <option value="VED-OIL-300ML">Cold-Pressed Mustard Oil 300ml (VED-OIL-300ML)</option>
+                        <option value="VED-OIL-500ML">Cold-Pressed Mustard Oil 500ml (VED-OIL-500ML)</option>
+                        <option value="VED-OIL-1LTR">Cold-Pressed Mustard Oil 1 Litre (VED-OIL-1LTR)</option>
+                        <option value="VED-OIL-2LTR">Cold-Pressed Mustard Oil 2 Litre (VED-OIL-2LTR)</option>
+                        <option value="VED-OIL-5LTR">Cold-Pressed Mustard Oil 5 Litre (VED-OIL-5LTR)</option>
+                      </optgroup>
+                      <optgroup label="Natural Sweeteners & Jaggery">
+                        <option value="VED-JAG-500GM">Natural Organic Jaggery 500g (VED-JAG-500GM)</option>
+                        <option value="VED-JAG-1KG">Natural Organic Jaggery 1kg (VED-JAG-1KG)</option>
+                      </optgroup>
+                    </select>
+                  </div>
+
+                  {quickForm.sku && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[#77736A] font-semibold mb-1 text-[11px]">
+                          Quantity Bought ({availableProducts.find((p) => p.sku === quickForm.sku)?.unit || "Units"}) *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="e.g. 50"
+                          value={quickForm.quantity}
+                          onChange={(e) => {
+                            const q = e.target.value;
+                            setQuickForm((prev) => {
+                              const next = { ...prev, quantity: q };
+                              if (next.unitCostRupees && q) {
+                                const total = (parseFloat(q) * parseFloat(next.unitCostRupees)).toFixed(2);
+                                if (!isNaN(parseFloat(total)) && parseFloat(total) > 0) {
+                                  next.amountRupees = total;
+                                }
+                              }
+                              return next;
+                            });
+                          }}
+                          className="w-full px-3 py-1.5 font-mono font-bold bg-white border border-[#E8E2D5] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#E4BF22]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[#77736A] font-semibold mb-1 text-[11px]">
+                          Unit Cost Price (₹)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="e.g. 550"
+                          value={quickForm.unitCostRupees}
+                          onChange={(e) => {
+                            const u = e.target.value;
+                            setQuickForm((prev) => {
+                              const next = { ...prev, unitCostRupees: u };
+                              if (next.quantity && u) {
+                                const total = (parseFloat(next.quantity) * parseFloat(u)).toFixed(2);
+                                if (!isNaN(parseFloat(total)) && parseFloat(total) > 0) {
+                                  next.amountRupees = total;
+                                }
+                              }
+                              return next;
+                            });
+                          }}
+                          className="w-full px-3 py-1.5 font-mono bg-white border border-[#E8E2D5] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#E4BF22]"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2 flex items-center justify-between bg-white p-2 rounded-lg border border-[#E8E2D5]">
+                        <label className="flex items-center gap-2 cursor-pointer text-[11px] text-[#493020] font-semibold">
+                          <input
+                            type="checkbox"
+                            checked={quickForm.updateInventory}
+                            onChange={(e) => setQuickForm({ ...quickForm, updateInventory: e.target.checked })}
+                            className="rounded text-[#493020] focus:ring-[#E4BF22]"
+                          />
+                          <span>Auto-update stock count in inventory & valuation</span>
+                        </label>
+                        {(() => {
+                          const p = availableProducts.find((item) => item.sku === quickForm.sku);
+                          const currentStock = p?.availableStock || 0;
+                          const added = parseInt(quickForm.quantity) || 0;
+                          return (
+                            <span className="text-[10px] text-[#77736A]">
+                              Stock: <strong>{currentStock}</strong> {p?.unit || "units"}
+                              {added > 0 && (
+                                <span className="text-emerald-700 font-bold ml-1">
+                                  -&gt; {currentStock + added}
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[#77736A] font-semibold mb-1">
@@ -938,20 +1267,52 @@ export default function FinancePage() {
                   </div>
                   <div className="sm:col-span-2">
                     <label className="block text-[#77736A] font-semibold mb-1">
-                      Paid From / Payment Terms *
+                      Paid By / Payment Mode *
                     </label>
                     <select
-                      value={quickForm.paymentAccount}
-                      onChange={(e) => setQuickForm({ ...quickForm, paymentAccount: e.target.value })}
+                      value={quickForm.paidByPartner ? `partner_${quickForm.paidByPartner}` : quickForm.paymentAccount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val.startsWith("partner_")) {
+                          const partner = val.replace("partner_", "");
+                          setQuickForm({
+                            ...quickForm,
+                            paidByPartner: partner,
+                            paymentAccount: partner === "Vivek" ? "3010" : partner === "Vineet" ? "3020" : "3030",
+                          });
+                        } else {
+                          setQuickForm({
+                            ...quickForm,
+                            paidByPartner: "",
+                            paymentAccount: val,
+                          });
+                        }
+                      }}
                       className="w-full px-3 py-1.5 bg-white border border-[#E8E2D5] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#E4BF22]"
                     >
-                      <option value="1000">Bank Account (Current) - Paid via NetBanking/Cheque</option>
-                      <option value="1020">UPI Collections Account - Paid via UPI</option>
-                      <option value="1010">Cash in Hand - Paid via Cash</option>
-                      <option value="2000">Accounts Payable (Unpaid / Vendor Credit)</option>
+                      <optgroup label="Company Business Accounts (Standard Outflow)">
+                        <option value="1000">Bank Account (Current) - Paid via NetBanking/Cheque</option>
+                        <option value="1020">UPI Collections Account - Paid via Company UPI</option>
+                        <option value="1010">Cash in Hand - Paid via Company Cash</option>
+                        <option value="2000">Accounts Payable (Unpaid / Vendor Credit)</option>
+                      </optgroup>
+                      <optgroup label="Paid Out-of-Pocket by Partner (Adds to Partner Capital)">
+                        <option value="partner_Vivek">Paid by Partner: Vivek (Adds to Vivek's Capital)</option>
+                        <option value="partner_Vineet">Paid by Partner: Vineet (Adds to Vineet's Capital)</option>
+                        <option value="partner_Varunesh">Paid by Partner: Varunesh (Adds to Varunesh's Capital)</option>
+                      </optgroup>
                     </select>
                   </div>
                 </div>
+
+                {quickForm.paidByPartner && (
+                  <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-lg text-[11px] text-[#493020] flex items-center gap-2">
+                    <Users2 className="w-4 h-4 text-[#A96B13] shrink-0" />
+                    <span>
+                      <strong>Partner Capital Contribution:</strong> Paid by <strong>{quickForm.paidByPartner}</strong> from personal funds. This ₹{quickAmount.toLocaleString("en-IN")} will automatically be credited to <strong>{quickForm.paidByPartner}</strong>'s capital balance and reflect on the Partners page.
+                    </span>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-[#77736A] font-semibold mb-1">
@@ -980,7 +1341,7 @@ export default function FinancePage() {
                   </div>
                   <div className="flex items-center justify-between font-mono">
                     <span className="text-blue-700">
-                      <strong>CREDIT (Cr):</strong> {quickForm.paymentAccount} - {quickCreditName}
+                      <strong>CREDIT (Cr):</strong> {quickCreditCode} - {quickCreditName}
                     </span>
                     <span className="font-bold">₹{quickAmount.toLocaleString("en-IN")}</span>
                   </div>
@@ -996,9 +1357,11 @@ export default function FinancePage() {
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg shadow-xs transition-colors"
+                    disabled={submitting}
+                    className="px-5 py-2 font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    Post Purchase Voucher
+                    {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{submitting ? "Posting..." : "Post Purchase Voucher"}</span>
                   </button>
                 </div>
               </form>
@@ -1163,14 +1526,15 @@ export default function FinancePage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={!isBalanced}
-                    className={`px-5 py-2 font-semibold text-white rounded-lg shadow-xs transition-colors ${
-                      isBalanced
-                        ? "bg-[#493020] hover:bg-[#1c3528]"
+                    disabled={!isBalanced || submitting}
+                    className={`px-5 py-2 font-semibold text-white rounded-lg shadow-xs transition-colors flex items-center gap-1.5 ${
+                      isBalanced && !submitting
+                        ? "bg-[#493020] hover:bg-[#382417]"
                         : "bg-[#77736A]/40 cursor-not-allowed"
                     }`}
                   >
-                    Post Journal Entry
+                    {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{submitting ? "Posting..." : "Post Journal Entry"}</span>
                   </button>
                 </div>
               </form>

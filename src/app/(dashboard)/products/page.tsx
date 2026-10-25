@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Boxes,
   Plus,
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { MoneyDisplay } from "@/components/shared/money-display";
 import { formatINR, formatDate, rupeesToPaise } from "@/lib/format";
+import { getCachedData, setCachedData, clearCachedData } from "@/lib/cache";
 
 interface ProductRecord {
   id: string;
@@ -217,6 +218,41 @@ export default function ProductsPage() {
 
   const [products, setProducts] = useState<ProductRecord[]>(INITIAL_VEDRO_PRODUCTS);
   const [movements, setMovements] = useState<StockMovementRecord[]>([]);
+
+  // Hydrate immediately from cache, then fetch fresh data from API
+  useEffect(() => {
+    const cached = getCachedData<any>("products");
+    if (cached) {
+      if (Array.isArray(cached.products) && cached.products.length > 0) {
+        setProducts(cached.products);
+      } else if (Array.isArray(cached) && cached.length > 0) {
+        setProducts(cached);
+      }
+      if (Array.isArray(cached.movements) && cached.movements.length > 0) {
+        setMovements(cached.movements);
+      }
+    }
+
+    const loadProducts = async () => {
+      try {
+        const res = await fetch("/api/products");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.products)) {
+            setProducts(data.products);
+          }
+          if (Array.isArray(data.movements)) {
+            setMovements(data.movements);
+          }
+          setCachedData("products", data);
+        }
+      } catch (err) {
+        console.error("Failed to load products from API:", err);
+      }
+    };
+
+    loadProducts();
+  }, []);
 
   // Add Product Form state
   const [formData, setFormData] = useState({
@@ -413,10 +449,12 @@ export default function ProductsPage() {
       status: "ACTIVE",
     };
 
-    setProducts([newProduct, ...products]);
+    const updatedProductsList = [newProduct, ...products];
+    setProducts(updatedProductsList);
     setIsModalOpen(false);
     setSuccessMessage(`Product SKU "${newProduct.sku}" added successfully!`);
 
+    let updatedMovementsList = movements;
     // If initial stock was provided, also record an OPENING movement
     if (initialQty > 0) {
       const openingMovement: StockMovementRecord = {
@@ -433,8 +471,16 @@ export default function ProductsPage() {
         notes: "Approved Opening Stock Migration for FY 2026–27",
         createdAt: new Date().toISOString(),
       };
-      setMovements((prev) => [openingMovement, ...prev]);
+      updatedMovementsList = [openingMovement, ...movements];
+      setMovements(updatedMovementsList);
     }
+
+    setCachedData("products", {
+      products: updatedProductsList,
+      movements: updatedMovementsList,
+      totalInventoryValuePaise: updatedProductsList.reduce((sum, p) => sum + p.availableStock * p.costPricePaise, 0),
+      totalUnitsInStock: updatedProductsList.reduce((sum, p) => sum + p.availableStock, 0),
+    });
 
     setFormData({
       sku: "",
@@ -499,22 +545,28 @@ export default function ProductsPage() {
     };
 
     // Update Product Stock Count
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.sku !== targetProduct.sku) return p;
-        let delta = 0;
-        if (["PURCHASE", "OPENING", "RETURN"].includes(movementForm.type)) {
-          delta = qty;
-        } else if (movementForm.type === "WASTAGE") {
-          delta = -qty;
-        } else {
-          delta = qty;
-        }
-        return { ...p, availableStock: Math.max(0, p.availableStock + delta) };
-      })
-    );
+    const updatedProducts = products.map((p) => {
+      if (p.sku !== targetProduct.sku) return p;
+      let delta = 0;
+      if (["PURCHASE", "OPENING", "RETURN"].includes(movementForm.type)) {
+        delta = qty;
+      } else if (movementForm.type === "WASTAGE") {
+        delta = -qty;
+      } else {
+        delta = qty;
+      }
+      return { ...p, availableStock: Math.max(0, p.availableStock + delta) };
+    });
 
-    setMovements([newMovement, ...movements]);
+    const updatedMovements = [newMovement, ...movements];
+    setProducts(updatedProducts);
+    setMovements(updatedMovements);
+    setCachedData("products", {
+      products: updatedProducts,
+      movements: updatedMovements,
+      totalInventoryValuePaise: updatedProducts.reduce((sum, p) => sum + p.availableStock * p.costPricePaise, 0),
+      totalUnitsInStock: updatedProducts.reduce((sum, p) => sum + p.availableStock, 0),
+    });
     setIsMovementModalOpen(false);
     setActiveTab("movements");
     setSuccessMessage(

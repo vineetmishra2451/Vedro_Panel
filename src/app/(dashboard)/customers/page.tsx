@@ -15,6 +15,9 @@ import {
   MapPin,
   Loader2,
   UserPlus,
+  Pencil,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import { KpiCard } from "@/components/shared/kpi-card";
 import { MoneyDisplay } from "@/components/shared/money-display";
@@ -54,6 +57,25 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Edit Customer State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<CustomerRecord | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    id: "",
+    name: "",
+    phone: "",
+    email: "",
+    city: "Mumbai",
+    source: "Retail Walk-in",
+    notes: "",
+  });
+  const [editFormError, setEditFormError] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+
+  // Delete Customer State
+  const [deleteConfirmCustomer, setDeleteConfirmCustomer] = useState<CustomerRecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Form state
   const [formData, setFormData] = useState({
     name: "",
@@ -67,6 +89,105 @@ export default function CustomersPage() {
   });
 
   const [formError, setFormError] = useState("");
+
+  const openEditModal = (cust: CustomerRecord) => {
+    setEditingCustomer(cust);
+    setEditFormData({
+      id: cust.id,
+      name: cust.name,
+      phone: cust.phone,
+      email: cust.email || "",
+      city: cust.city || "Mumbai",
+      source: cust.source,
+      notes: cust.notes || "",
+    });
+    setEditFormError("");
+    setIsEditModalOpen(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditFormError("");
+
+    if (!editFormData.name.trim()) {
+      setEditFormError("Customer name is required.");
+      return;
+    }
+    if (!editFormData.phone.trim()) {
+      setEditFormError("Customer phone number is required.");
+      return;
+    }
+
+    setIsEditing(true);
+    try {
+      const res = await fetch("/api/customers", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editFormData),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to update customer");
+      }
+
+      const data = await res.json();
+      const updatedCustomer = data.customer;
+
+      const updatedList = customers.map((c) =>
+        c.id === updatedCustomer.id ? { ...c, ...updatedCustomer } : c
+      );
+      setCustomers(updatedList);
+      setCachedData("customers", updatedList);
+
+      if (selectedDrawerCustomer?.id === updatedCustomer.id) {
+        setSelectedDrawerCustomer({ ...selectedDrawerCustomer, ...updatedCustomer });
+      }
+
+      setIsEditModalOpen(false);
+      setSuccessMessage(`Customer "${updatedCustomer.name}" updated successfully!`);
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Edit customer error:", err);
+      setEditFormError(err.message || "Failed to update customer");
+    } finally {
+      setIsEditing(false);
+    }
+  };
+
+  const handleDeleteCustomer = async () => {
+    if (!deleteConfirmCustomer) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/customers?id=${deleteConfirmCustomer.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to delete customer");
+      }
+
+      const updatedList = customers.filter((c) => c.id !== deleteConfirmCustomer.id);
+      setCustomers(updatedList);
+      setCachedData("customers", updatedList);
+
+      if (selectedDrawerCustomer?.id === deleteConfirmCustomer.id) {
+        setSelectedDrawerCustomer(null);
+      }
+
+      const deletedName = deleteConfirmCustomer.name;
+      setDeleteConfirmCustomer(null);
+      setSuccessMessage(`Customer "${deletedName}" deleted successfully.`);
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err: any) {
+      console.error("Delete customer error:", err);
+      alert(err.message || "Failed to delete customer");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const fetchCustomers = async () => {
     // 1. Immediately hydrate from cache for zero-delay UI rendering
@@ -344,12 +465,29 @@ export default function CustomersPage() {
                         <MoneyDisplay paise={cust.totalSpentPaise} />
                       </td>
                       <td className="px-5 py-3.5 text-center">
-                        <button
-                          onClick={() => setSelectedDrawerCustomer(cust)}
-                          className="text-[11px] font-semibold text-[#493020] hover:underline"
-                        >
-                          Profile
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => setSelectedDrawerCustomer(cust)}
+                            className="px-2 py-1 text-[11px] font-semibold text-[#493020] hover:bg-[#F2EBD8]/60 rounded transition-colors"
+                            title="View Full Profile"
+                          >
+                            Profile
+                          </button>
+                          <button
+                            onClick={() => openEditModal(cust)}
+                            className="p-1 text-[#77736A] hover:text-[#493020] hover:bg-[#F2EBD8]/80 rounded transition-colors"
+                            title="Edit Customer Details"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmCustomer(cust)}
+                            className="p-1 text-[#77736A] hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                            title="Delete Customer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -656,12 +794,212 @@ export default function CustomersPage() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-[#E8E2D5]">
+            <div className="pt-4 border-t border-[#E8E2D5] space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => openEditModal(selectedDrawerCustomer)}
+                  className="w-full py-2 text-xs font-semibold text-[#493020] bg-[#F2EBD8] hover:bg-[#E8DFC7] rounded-lg transition-colors border border-[#493020]/20 flex items-center justify-center gap-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span>Edit Details</span>
+                </button>
+                <button
+                  onClick={() => setDeleteConfirmCustomer(selectedDrawerCustomer)}
+                  className="w-full py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors border border-rose-200 flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
+              </div>
               <button
                 onClick={() => setSelectedDrawerCustomer(null)}
                 className="w-full py-2 text-xs font-semibold text-[#29271F] bg-[#FCFAF3] hover:bg-[#E8E2D5] rounded-lg transition-colors border border-[#E8E2D5]"
               >
                 Close Drawer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Customer Modal */}
+      {isEditModalOpen && editingCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#493020]/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl border border-[#E8E2D5] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3.5 border-b border-[#E8E2D5]">
+              <div>
+                <h3 className="text-sm font-bold text-[#29271F] leading-tight">
+                  Edit Customer Details
+                </h3>
+                <p className="text-[11px] text-[#77736A]">
+                  Update contact, city, referral source, or account notes
+                </p>
+              </div>
+              <button
+                onClick={() => setIsEditModalOpen(false)}
+                className="text-[#77736A] hover:text-[#29271F] p-1 rounded-md"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="space-y-3.5 mt-4">
+              {editFormError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-300 text-rose-800 text-xs font-semibold">
+                  {editFormError}
+                </div>
+              )}
+
+              {/* Full Name */}
+              <div>
+                <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                  Full Customer Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Ramesh Patel"
+                  value={editFormData.name}
+                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                  className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                />
+              </div>
+
+              {/* Phone & Email */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                    Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="e.g. 9820012345"
+                    value={editFormData.phone}
+                    onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] font-mono focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="e.g. ramesh@example.com"
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  />
+                </div>
+              </div>
+
+              {/* City & Acquisition Source */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                    City / Location
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Mumbai, Pune"
+                    value={editFormData.city}
+                    onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                    Source / Channel
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Retail Walk-in, Website D2C"
+                    value={editFormData.source}
+                    onChange={(e) => setEditFormData({ ...editFormData, source: e.target.value })}
+                    className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                  />
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-[11px] font-bold text-[#77736A] uppercase tracking-wider mb-1">
+                  Customer Notes / Preferences
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Prefers 1L A2 Ghee, calls on WhatsApp before ordering"
+                  value={editFormData.notes}
+                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                  className="w-full text-xs bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg p-2 text-[#29271F] focus:outline-hidden focus:ring-1 focus:ring-[#E4BF22]"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E8E2D5]">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="px-3 py-1.5 text-xs font-semibold text-[#77736A] hover:text-[#29271F] rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditing}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50"
+                >
+                  {isEditing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isEditing ? "Saving Changes..." : "Save Changes"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Customer Confirmation Modal */}
+      {deleteConfirmCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#493020]/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-sm w-full p-5 shadow-xl border border-[#E8E2D5]">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-9 h-9 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-rose-700" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-[#29271F]">
+                  Delete Customer?
+                </h3>
+                <p className="text-[11px] text-[#77736A]">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#29271F] leading-relaxed mb-4">
+              Are you sure you want to delete <strong>{deleteConfirmCustomer.name}</strong> (
+              <span className="font-mono">{deleteConfirmCustomer.phone}</span>)?
+              Any past orders will remain intact with unlinked customer attribution.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E8E2D5]">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmCustomer(null)}
+                disabled={isDeleting}
+                className="px-3 py-1.5 text-xs font-semibold text-[#77736A] hover:text-[#29271F] rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteCustomer}
+                disabled={isDeleting}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 font-bold rounded-lg transition-colors shadow-xs disabled:opacity-50"
+              >
+                {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isDeleting ? "Deleting..." : "Delete Customer"}</span>
               </button>
             </div>
           </div>

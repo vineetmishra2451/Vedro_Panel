@@ -48,7 +48,27 @@ export default function OverviewDashboardPage() {
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [partnerStats] = useState([
+  const [expenseSummary, setExpenseSummary] = useState<{
+    totalExpensesPaise: number;
+    totalCashOutflowPaise: number;
+    categoryBreakdown: Record<string, number>;
+    monthlyExpenses: Record<string, number>;
+  }>({
+    totalExpensesPaise: 0,
+    totalCashOutflowPaise: 0,
+    categoryBreakdown: {},
+    monthlyExpenses: {},
+  });
+
+  const [inventoryStats, setInventoryStats] = useState<{
+    totalInventoryValuePaise: number;
+    totalUnitsInStock: number;
+  }>({
+    totalInventoryValuePaise: 0,
+    totalUnitsInStock: 0,
+  });
+
+  const [partnerStats, setPartnerStats] = useState([
     { name: "Vivek", balancePaise: 0, entriesCount: 0 },
     { name: "Vineet", balancePaise: 0, entriesCount: 0 },
     { name: "Varunesh", balancePaise: 0, entriesCount: 0 },
@@ -67,18 +87,97 @@ export default function OverviewDashboardPage() {
       setLoading(false);
     }
 
-    // 2. Refresh in the background (stale-while-revalidate)
-    const fetchDashboardOrders = async () => {
+    const cachedExpenses = getCachedData<any>("expenses");
+    if (cachedExpenses?.summary) {
+      setExpenseSummary(cachedExpenses.summary);
+    }
+
+    const cachedProducts = getCachedData<any>("products");
+    if (cachedProducts) {
+      if (typeof cachedProducts.totalInventoryValuePaise === "number") {
+        setInventoryStats({
+          totalInventoryValuePaise: cachedProducts.totalInventoryValuePaise,
+          totalUnitsInStock: cachedProducts.totalUnitsInStock || 0,
+        });
+      } else if (Array.isArray(cachedProducts)) {
+        const val = cachedProducts.reduce(
+          (sum: number, p: any) => sum + (p.availableStock || 0) * (p.costPricePaise || 0),
+          0
+        );
+        const units = cachedProducts.reduce(
+          (sum: number, p: any) => sum + (p.availableStock || 0),
+          0
+        );
+        setInventoryStats({
+          totalInventoryValuePaise: val,
+          totalUnitsInStock: units,
+        });
+      }
+    }
+
+    const cachedPartners = getCachedData<any>("partners");
+    if (cachedPartners?.partnerStats) {
+      setPartnerStats(
+        cachedPartners.partnerStats.map((p: any) => ({
+          name: p.name,
+          balancePaise: p.netBalance || p.balancePaise || 0,
+          entriesCount: p.entriesCount || 0,
+        }))
+      );
+    }
+
+    // 2. Refresh in the background (stale-while-revalidate) in parallel
+    const fetchOverviewData = async () => {
       try {
         if (!cachedOrders || cachedOrders.length === 0) {
           setLoading(true);
         }
-        const res = await fetch("/api/orders?limit=100");
-        if (res.ok) {
-          const data = await res.json();
+
+        const [ordersRes, expensesRes, productsRes, partnersRes] = await Promise.allSettled([
+          fetch("/api/orders?limit=100"),
+          fetch("/api/expenses?limit=100"),
+          fetch("/api/products"),
+          fetch("/api/partners"),
+        ]);
+
+        if (ordersRes.status === "fulfilled" && ordersRes.value.ok) {
+          const data = await ordersRes.value.json();
           if (Array.isArray(data.orders)) {
             setOrders(data.orders);
             setCachedData("orders", data.orders);
+          }
+        }
+
+        if (expensesRes.status === "fulfilled" && expensesRes.value.ok) {
+          const expData = await expensesRes.value.json();
+          if (expData.summary) {
+            setExpenseSummary(expData.summary);
+          }
+          setCachedData("expenses", expData);
+        }
+
+        if (productsRes.status === "fulfilled" && productsRes.value.ok) {
+          const prodData = await productsRes.value.json();
+          if (prodData) {
+            setInventoryStats({
+              totalInventoryValuePaise: prodData.totalInventoryValuePaise || 0,
+              totalUnitsInStock: prodData.totalUnitsInStock || 0,
+            });
+            setCachedData("products", prodData);
+          }
+        }
+
+        if (partnersRes.status === "fulfilled" && partnersRes.value.ok) {
+          const partData = await partnersRes.value.json();
+          if (Array.isArray(partData.partnerStats)) {
+            setPartnerStats(
+              partData.partnerStats.map((p: any) => ({
+                name: p.name,
+                balancePaise: p.netBalance || 0,
+                entriesCount: p.entriesCount || 0,
+              }))
+            );
+            setCachedData("partners", partData);
           }
         }
       } catch (err) {
@@ -88,7 +187,7 @@ export default function OverviewDashboardPage() {
       }
     };
 
-    fetchDashboardOrders();
+    fetchOverviewData();
   }, []);
 
   const [filterState, setFilterState] = useState<FilterState>({
@@ -176,8 +275,23 @@ export default function OverviewDashboardPage() {
   // Compute live revenue and sales metrics based on filtered results
   const totalNetRevenuePaise = filteredOrders.reduce((acc, o) => acc + o.totalPaise, 0);
   const totalUnitsSold = filteredOrders.reduce((acc, o) => acc + o.quantity, 0);
-  const estimatedGrossProfitPaise = Math.round(totalNetRevenuePaise * 0.42);
-  const estimatedOperatingProfitPaise = Math.round(totalNetRevenuePaise * 0.28);
+
+  const totalRecordedExpensesPaise = expenseSummary.totalExpensesPaise || 0;
+  const rawMaterialExpensesPaise =
+    (expenseSummary.categoryBreakdown["5050"] || 0) +
+    (expenseSummary.categoryBreakdown["1200"] || 0);
+
+  // Profit calculation: If raw materials recorded, deduct as direct COGS; otherwise use standard 42% product margin
+  const estimatedGrossProfitPaise =
+    rawMaterialExpensesPaise > 0
+      ? Math.max(0, totalNetRevenuePaise - rawMaterialExpensesPaise)
+      : Math.round(totalNetRevenuePaise * 0.42);
+
+  // Operating Profit: Net Revenue minus Total Recorded Expenses (or standard EBITDA margin)
+  const estimatedOperatingProfitPaise =
+    totalRecordedExpensesPaise > 0
+      ? Math.max(0, totalNetRevenuePaise - totalRecordedExpensesPaise)
+      : Math.round(totalNetRevenuePaise * 0.28);
 
   // Compute channel breakdown
   const channelTotals: Record<string, { count: number; totalPaise: number }> = {
@@ -299,8 +413,10 @@ export default function OverviewDashboardPage() {
     });
 
     const revRs = monthOrders.reduce((sum, o) => sum + o.totalPaise / 100, 0);
-    const expRs = Math.round(revRs * 0.58);
-    const profitRs = Math.round(revRs * 0.42);
+    // Real recorded monthly expense from General Ledger if present; otherwise fallback to 58% baseline
+    const recordedExpRs = (expenseSummary.monthlyExpenses[m.label] || 0) / 100;
+    const expRs = recordedExpRs > 0 ? recordedExpRs : Math.round(revRs * 0.58);
+    const profitRs = revRs - expRs;
 
     return {
       month: m.label,
@@ -414,13 +530,63 @@ export default function OverviewDashboardPage() {
     },
   ];
 
+  const rawMatTotal =
+    (expenseSummary.categoryBreakdown["5050"] || 0) +
+    (expenseSummary.categoryBreakdown["1200"] || 0);
+  const packTotal =
+    (expenseSummary.categoryBreakdown["5100"] || 0) +
+    (expenseSummary.categoryBreakdown["1210"] || 0);
+  const mfgTotal = expenseSummary.categoryBreakdown["5400"] || 0;
+  const freightTotal = expenseSummary.categoryBreakdown["5300"] || 0;
+  const marketingTotal = expenseSummary.categoryBreakdown["5200"] || 0;
+  const generalTotal = expenseSummary.categoryBreakdown["5600"] || 0;
+
+  const totalCatExpenses =
+    rawMatTotal + packTotal + mfgTotal + freightTotal + marketingTotal + generalTotal;
+
   const expenseCategories = [
-    { name: "Raw Materials & Seeds", share: "0%", color: "#E4BF22", code: "5050" },
-    { name: "Packaging & Glass Bottles", share: "0%", color: "#7D8654", code: "5100" },
-    { name: "Cold-Pressing & Manufacturing", share: "0%", color: "#493020", code: "5130" },
-    { name: "Inward Freight & Logistics", share: "0%", color: "#A96B13", code: "5300" },
-    { name: "Marketing & Performance Ads", share: "0%", color: "#28764A", code: "5200" },
-    { name: "General & Warehouse Overheads", share: "0%", color: "#77736A", code: "5600" },
+    {
+      name: "Raw Materials & Seeds",
+      amountPaise: rawMatTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((rawMatTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#E4BF22",
+      code: "5050",
+    },
+    {
+      name: "Packaging & Glass Bottles",
+      amountPaise: packTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((packTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#7D8654",
+      code: "5100",
+    },
+    {
+      name: "Equipment & Maintenance",
+      amountPaise: mfgTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((mfgTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#493020",
+      code: "5400",
+    },
+    {
+      name: "Inward Freight & Logistics",
+      amountPaise: freightTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((freightTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#A96B13",
+      code: "5300",
+    },
+    {
+      name: "Marketing & Performance Ads",
+      amountPaise: marketingTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((marketingTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#28764A",
+      code: "5200",
+    },
+    {
+      name: "General & Warehouse Overheads",
+      amountPaise: generalTotal,
+      share: totalCatExpenses > 0 ? `${Math.round((generalTotal / totalCatExpenses) * 100)}%` : "0%",
+      color: "#77736A",
+      code: "5600",
+    },
   ];
 
   return (
@@ -479,20 +645,24 @@ export default function OverviewDashboardPage() {
 
         <KpiCard
           title="Inventory Value"
-          value={0}
+          value={inventoryStats.totalInventoryValuePaise}
           format="currency"
           drillDownHref="/products"
           icon={<Boxes className="w-4 h-4" />}
-          subtext="Finished goods stock"
+          subtext={
+            inventoryStats.totalUnitsInStock > 0
+              ? `${inventoryStats.totalUnitsInStock.toLocaleString()} units in warehouse`
+              : "Finished goods stock"
+          }
         />
 
         <KpiCard
           title="Cash & Bank"
-          value={totalNetRevenuePaise}
+          value={Math.max(0, totalNetRevenuePaise - (expenseSummary.totalCashOutflowPaise || 0))}
           format="currency"
           drillDownHref="/finance"
           icon={<Wallet className="w-4 h-4" />}
-          subtext="Real-time cash & UPI inflow"
+          subtext="Net liquid cash (inflow - outflow)"
         />
       </div>
 
@@ -759,7 +929,9 @@ export default function OverviewDashboardPage() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="font-mono font-bold text-[#493020]">₹0.00</div>
+                    <div className="font-mono font-bold text-[#493020]">
+                      {formatINR(cat.amountPaise)}
+                    </div>
                     <span className="text-[10px] text-[#77736A]">{cat.share}</span>
                   </div>
                 </div>
