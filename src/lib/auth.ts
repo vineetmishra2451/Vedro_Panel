@@ -64,7 +64,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           (u) => u.username.toLowerCase() === idInput || u.email.toLowerCase() === idInput
         );
 
-        const configuredPassword = process.env.ADMIN_PASSWORD || "vedro-partner-2026";
+        const configuredPassword = process.env.ADMIN_PASSWORD || "Vedro@Life123";
         if (defaultUser && password === configuredPassword) {
           return {
             id: `usr-${defaultUser.username}`,

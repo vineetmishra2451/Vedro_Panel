@@ -24,7 +24,7 @@ async function main() {
   console.log(`✓ Company ready: ${company.name} (${company.id})`);
 
   // 2. Create Default Admin User
-  const seedPassword = process.env.ADMIN_PASSWORD || "vedro-partner-2026";
+  const seedPassword = process.env.ADMIN_PASSWORD || "Vedro@Life123";
   const passwordHash = await bcrypt.hash(seedPassword, 10);
   const adminUser = await prisma.appUser.upsert({
     where: { email: "admin@vedro.com" },
