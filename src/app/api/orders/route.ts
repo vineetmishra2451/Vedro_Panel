@@ -3,10 +3,20 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { MovementType, MovementStatus } from "@prisma/client";
 import { DEFAULT_CATALOG, ensureDefaultProducts } from "../products/route";
+import {
+  getCachedLocationId,
+  setCachedLocationId,
+  getCachedChannelId,
+  setCachedChannelId,
+} from "@/lib/static-cache";
+import { startPerf, withPerfHeaders } from "@/lib/perf";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
 async function getOrCreateLocation(): Promise<string> {
+  const cached = getCachedLocationId();
+  if (cached) return cached;
+
   let location = await prisma.inventoryLocation.findFirst({
     where: { companyId: DEFAULT_COMPANY_ID },
     select: { id: true },
@@ -22,33 +32,40 @@ async function getOrCreateLocation(): Promise<string> {
       select: { id: true },
     });
   }
+  setCachedLocationId(location.id);
   return location.id;
 }
 
+/**
+ * Fast database-level aggregation of available stock using PostgreSQL groupBy.
+ * Avoids transferring large arrays of movement records into Node memory.
+ */
 async function getProductAvailableStock(productId: string): Promise<number> {
-  const movements = await prisma.inventoryMovement.findMany({
+  const movementSums = await prisma.inventoryMovement.groupBy({
+    by: ["type"],
     where: {
       companyId: DEFAULT_COMPANY_ID,
       productId,
       status: MovementStatus.APPROVED,
     },
-    select: { type: true, quantity: true },
+    _sum: { quantity: true },
   });
 
   let stock = 0;
-  for (const m of movements) {
+  for (const m of movementSums) {
+    const qty = m._sum.quantity || 0;
     if (m.type === "PURCHASE" || m.type === "OPENING" || m.type === "RETURN") {
-      stock += m.quantity;
+      stock += qty;
     } else if (m.type === "SALE" || m.type === "WASTAGE") {
-      stock -= m.quantity;
+      stock -= qty;
     }
   }
   return Math.max(0, stock);
 }
 
 export async function GET(req: Request) {
+  const perf = startPerf("GET_ORDERS", req);
   try {
-    const session = await auth();
     const { searchParams } = new URL(req.url);
 
     // Pagination parameters: support both limit/offset and cursor pagination
@@ -64,38 +81,40 @@ export async function GET(req: Request) {
       : (page - 1) * limit;
 
     // Batch execute total count and selective query in parallel
-    const [totalCount, dbOrders] = await Promise.all([
-      prisma.order.count({ where: { companyId: DEFAULT_COMPANY_ID } }),
-      prisma.order.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: {
-          id: true,
-          orderNumber: true,
-          date: true,
-          status: true,
-          subtotalPaise: true,
-          discountPaise: true,
-          taxPaise: true,
-          totalPaise: true,
-          notes: true,
-          channel: { select: { name: true } },
-          customer: { select: { name: true, phone: true } },
-          lines: {
-            select: {
-              quantity: true,
-              unitPricePaise: true,
-              totalPaise: true,
-              product: { select: { name: true, sku: true } },
+    const [totalCount, dbOrders] = await perf.step("db_queries", () =>
+      Promise.all([
+        prisma.order.count({ where: { companyId: DEFAULT_COMPANY_ID } }),
+        prisma.order.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID },
+          select: {
+            id: true,
+            orderNumber: true,
+            date: true,
+            status: true,
+            subtotalPaise: true,
+            discountPaise: true,
+            taxPaise: true,
+            totalPaise: true,
+            notes: true,
+            channel: { select: { name: true } },
+            customer: { select: { name: true, phone: true } },
+            lines: {
+              select: {
+                quantity: true,
+                unitPricePaise: true,
+                totalPaise: true,
+                product: { select: { name: true, sku: true } },
+              },
             },
           },
-        },
-        orderBy: { date: "desc" },
-        take: limit,
-        ...(cursor
-          ? { cursor: { id: cursor }, skip: 1 }
-          : { skip }),
-      }),
-    ]);
+          orderBy: { date: "desc" },
+          take: limit,
+          ...(cursor
+            ? { cursor: { id: cursor }, skip: 1 }
+            : { skip }),
+        }),
+      ])
+    );
 
     const formattedOrders = dbOrders.map((order) => {
       const primaryLine = order.lines[0];
@@ -141,7 +160,7 @@ export async function GET(req: Request) {
       ? dbOrders.length === limit
       : skip + dbOrders.length < totalCount;
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       orders: formattedOrders,
       pagination: {
         total: totalCount,
@@ -152,13 +171,19 @@ export async function GET(req: Request) {
         nextCursor,
       },
     });
+    return withPerfHeaders(res, perf, 200);
   } catch (error) {
     console.error("Error fetching orders:", error);
-    return NextResponse.json({ error: "Failed to fetch orders" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to fetch orders" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
 export async function POST(req: Request) {
+  const perf = startPerf("POST_ORDER", req);
   try {
     const session = await auth();
     const body = await req.json();
@@ -222,45 +247,52 @@ export async function POST(req: Request) {
       }
     }
 
+    // Resolve channel from in-memory cache if warm
+    const cachedChanId = getCachedChannelId();
+
     // Run channel, customer check, and product lookups in parallel for maximum database speed
-    const [existingChannel, existingCustomer, initialProduct] = await Promise.all([
-      prisma.salesChannel.findFirst({
-        where: {
-          companyId: DEFAULT_COMPANY_ID,
-          name: { contains: "Offline", mode: "insensitive" },
-        },
-        select: { id: true, name: true },
-      }),
-      saveToContacts && (trimmedPhone || trimmedName)
-        ? prisma.customer.findFirst({
-            where: {
-              companyId: DEFAULT_COMPANY_ID,
-              OR: [
-                ...(trimmedPhone ? [{ phone: trimmedPhone }] : []),
-                ...(trimmedName ? [{ name: { equals: trimmedName, mode: "insensitive" } }] : []),
-              ],
-            },
-            select: { id: true, name: true, phone: true, source: true },
-          })
-        : null,
-      prisma.product.findFirst({
-        where: {
-          companyId: DEFAULT_COMPANY_ID,
-          OR: [
-            ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
-            { sku: { contains: itemDescription, mode: "insensitive" } },
-            { name: { contains: itemDescription, mode: "insensitive" } },
-          ],
-        },
-        select: {
-          id: true,
-          name: true,
-          sku: true,
-          costPricePaise: true,
-          sellingPricePaise: true,
-        },
-      }),
-    ]);
+    const [existingChannel, existingCustomer, initialProduct] = await perf.step("lookup_prep", () =>
+      Promise.all([
+        !cachedChanId
+          ? prisma.salesChannel.findFirst({
+              where: {
+                companyId: DEFAULT_COMPANY_ID,
+                name: { contains: "Offline", mode: "insensitive" },
+              },
+              select: { id: true, name: true },
+            })
+          : null,
+        saveToContacts && (trimmedPhone || trimmedName)
+          ? prisma.customer.findFirst({
+              where: {
+                companyId: DEFAULT_COMPANY_ID,
+                OR: [
+                  ...(trimmedPhone ? [{ phone: trimmedPhone }] : []),
+                  ...(trimmedName ? [{ name: { equals: trimmedName, mode: "insensitive" } }] : []),
+                ],
+              },
+              select: { id: true, name: true, phone: true, source: true },
+            })
+          : null,
+        prisma.product.findFirst({
+          where: {
+            companyId: DEFAULT_COMPANY_ID,
+            OR: [
+              ...(targetSku ? [{ sku: { equals: targetSku, mode: "insensitive" } }] : []),
+              { sku: { contains: itemDescription, mode: "insensitive" } },
+              { name: { contains: itemDescription, mode: "insensitive" } },
+            ],
+          },
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            costPricePaise: true,
+            sellingPricePaise: true,
+          },
+        }),
+      ])
+    );
 
     let product = initialProduct;
 
@@ -309,23 +341,27 @@ export async function POST(req: Request) {
     if (product) {
       availableStock = await getProductAvailableStock(product.id);
       if (qty > availableStock) {
-        return NextResponse.json(
-          {
-            error: `Stock Mismatch: Requested ${qty} units, but only ${availableStock} units of "${product.name}" (${product.sku}) are available in inventory. Please adjust order quantity or restock inventory first.`,
-            stockMismatch: true,
-            insufficientStock: true,
-            sku: product.sku,
-            productName: product.name,
-            availableStock,
-            requestedQuantity: qty,
-          },
-          { status: 400 }
+        return withPerfHeaders(
+          NextResponse.json(
+            {
+              error: `Stock Mismatch: Requested ${qty} units, but only ${availableStock} units of "${product.name}" (${product.sku}) are available in inventory. Please adjust order quantity or restock inventory first.`,
+              stockMismatch: true,
+              insufficientStock: true,
+              sku: product.sku,
+              productName: product.name,
+              availableStock,
+              requestedQuantity: qty,
+            },
+            { status: 400 }
+          ),
+          perf,
+          400
         );
       }
     }
 
     // Fast channel resolution
-    let channelId = existingChannel?.id;
+    let channelId = cachedChanId || existingChannel?.id;
     if (!channelId) {
       const newChannel = await prisma.salesChannel.create({
         data: {
@@ -338,6 +374,7 @@ export async function POST(req: Request) {
       });
       channelId = newChannel.id;
     }
+    setCachedChannelId(channelId);
 
     // Fast customer handling
     let customerId: string | null = null;
@@ -478,7 +515,7 @@ export async function POST(req: Request) {
       remainingStock: product ? availableStock - qty : undefined,
     };
 
-    return NextResponse.json(
+    const res = NextResponse.json(
       {
         order: responseOrder,
         inventoryMovement,
@@ -488,20 +525,30 @@ export async function POST(req: Request) {
       },
       { status: 201 }
     );
+    return withPerfHeaders(res, perf, 201);
   } catch (error) {
     console.error("Error creating order:", error);
-    return NextResponse.json({ error: "Failed to record order" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to record order" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
 export async function PUT(req: Request) {
+  const perf = startPerf("PUT_ORDER", req);
   try {
     const session = await auth();
     const body = await req.json();
     const { id } = body;
 
     if (!id) {
-      return NextResponse.json({ error: "Order ID is required for editing" }, { status: 400 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Order ID is required for editing" }, { status: 400 }),
+        perf,
+        400
+      );
     }
 
     const {
@@ -589,7 +636,11 @@ export async function PUT(req: Request) {
     ]);
 
     if (!existingOrder) {
-      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Order not found" }, { status: 404 }),
+        perf,
+        404
+      );
     }
 
     let product = initialProduct;
@@ -626,17 +677,21 @@ export async function PUT(req: Request) {
       availableHeadroom = currentStock + existingMovementQty;
 
       if (qty > availableHeadroom) {
-        return NextResponse.json(
-          {
-            error: `Stock Mismatch: Updated quantity of ${qty} units exceeds available stock of ${availableHeadroom} units for "${product.name}" (${product.sku}).`,
-            stockMismatch: true,
-            insufficientStock: true,
-            sku: product.sku,
-            productName: product.name,
-            availableStock: availableHeadroom,
-            requestedQuantity: qty,
-          },
-          { status: 400 }
+        return withPerfHeaders(
+          NextResponse.json(
+            {
+              error: `Stock Mismatch: Updated quantity of ${qty} units exceeds available stock of ${availableHeadroom} units for "${product.name}" (${product.sku}).`,
+              stockMismatch: true,
+              insufficientStock: true,
+              sku: product.sku,
+              productName: product.name,
+              availableStock: availableHeadroom,
+              requestedQuantity: qty,
+            },
+            { status: 400 }
+          ),
+          perf,
+          400
         );
       }
     }
@@ -655,71 +710,73 @@ export async function PUT(req: Request) {
     const locationId = await getOrCreateLocation();
 
     // Delete existing lines and update order & inventory movement in a single transaction
-    await prisma.$transaction(async (tx) => {
-      await tx.orderLine.deleteMany({ where: { orderId: id } });
-      await tx.order.update({
-        where: { id },
-        data: {
-          date: new Date(date || Date.now()),
-          status: paymentStatus === "PAID" ? "FULFILLED" : "CONFIRMED",
-          subtotalPaise,
-          discountPaise,
-          taxPaise,
-          totalPaise,
-          notes: finalNotes,
-          ...(product
-            ? {
-                lines: {
-                  create: [
-                    {
-                      productId: product.id,
-                      quantity: qty,
-                      unitPricePaise,
-                      discountPaise,
-                      taxableAmountPaise: taxablePaise,
-                      cgstPaise: Math.round(taxPaise / 2),
-                      sgstPaise: Math.round(taxPaise / 2),
-                      totalPaise,
-                    },
-                  ],
-                },
-              }
-            : {}),
-        },
-        select: { id: true },
-      });
+    await perf.step("tx_update", () =>
+      prisma.$transaction(async (tx) => {
+        await tx.orderLine.deleteMany({ where: { orderId: id } });
+        await tx.order.update({
+          where: { id },
+          data: {
+            date: new Date(date || Date.now()),
+            status: paymentStatus === "PAID" ? "FULFILLED" : "CONFIRMED",
+            subtotalPaise,
+            discountPaise,
+            taxPaise,
+            totalPaise,
+            notes: finalNotes,
+            ...(product
+              ? {
+                  lines: {
+                    create: [
+                      {
+                        productId: product.id,
+                        quantity: qty,
+                        unitPricePaise,
+                        discountPaise,
+                        taxableAmountPaise: taxablePaise,
+                        cgstPaise: Math.round(taxPaise / 2),
+                        sgstPaise: Math.round(taxPaise / 2),
+                        totalPaise,
+                      },
+                    ],
+                  },
+                }
+              : {}),
+          },
+          select: { id: true },
+        });
 
-      if (product) {
-        if (existingMovement) {
-          await tx.inventoryMovement.update({
-            where: { id: existingMovement.id },
-            data: {
-              productId: product.id,
-              quantity: qty,
-              reference: existingOrder.orderNumber,
-              costPricePaise: product.costPricePaise || 0,
-              reason: `Updated Sale Order ${existingOrder.orderNumber}`,
-            },
-          });
-        } else {
-          await tx.inventoryMovement.create({
-            data: {
-              companyId: DEFAULT_COMPANY_ID,
-              productId: product.id,
-              locationId,
-              type: MovementType.SALE,
-              status: MovementStatus.APPROVED,
-              quantity: qty,
-              costPricePaise: product.costPricePaise || 0,
-              orderId: id,
-              reference: existingOrder.orderNumber,
-              reason: `Sale Order ${existingOrder.orderNumber}`,
-              createdBy: session?.user?.name || "System",
-            },
-          });
+        if (product) {
+          if (existingMovement) {
+            await tx.inventoryMovement.update({
+              where: { id: existingMovement.id },
+              data: {
+                productId: product.id,
+                quantity: qty,
+                reference: existingOrder.orderNumber,
+                costPricePaise: product.costPricePaise || 0,
+                reason: `Updated Sale Order ${existingOrder.orderNumber}`,
+              },
+            });
+          } else {
+            await tx.inventoryMovement.create({
+              data: {
+                companyId: DEFAULT_COMPANY_ID,
+                productId: product.id,
+                locationId,
+                type: MovementType.SALE,
+                status: MovementStatus.APPROVED,
+                quantity: qty,
+                costPricePaise: product.costPricePaise || 0,
+                orderId: id,
+                reference: existingOrder.orderNumber,
+                reason: `Sale Order ${existingOrder.orderNumber}`,
+                createdBy: session?.user?.name || "System",
+              },
+            });
+          }
         }
-      }
-    });
+      })
+    );
 
     const responseOrder = {
       id: existingOrder.id,
@@ -746,17 +803,26 @@ export async function PUT(req: Request) {
       remainingStock: product ? availableHeadroom - qty : undefined,
     };
 
-    return NextResponse.json({
-      order: responseOrder,
-      message: `Order ${existingOrder.orderNumber} updated! Inventory stock adjusted to ${qty} units.`,
-    });
+    return withPerfHeaders(
+      NextResponse.json({
+        order: responseOrder,
+        message: `Order ${existingOrder.orderNumber} updated! Inventory stock adjusted to ${qty} units.`,
+      }),
+      perf,
+      200
+    );
   } catch (error) {
     console.error("Error updating order:", error);
-    return NextResponse.json({ error: "Failed to update order" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to update order" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
 export async function DELETE(req: Request) {
+  const perf = startPerf("DELETE_ORDER", req);
   try {
     const session = await auth();
     const { searchParams } = new URL(req.url);
@@ -772,7 +838,11 @@ export async function DELETE(req: Request) {
     }
 
     if (!id) {
-      return NextResponse.json({ error: "Order ID is required for deletion" }, { status: 400 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Order ID is required for deletion" }, { status: 400 }),
+        perf,
+        400
+      );
     }
 
     const existingOrder = await prisma.order.findUnique({
@@ -781,7 +851,11 @@ export async function DELETE(req: Request) {
     });
 
     if (!existingOrder) {
-      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Order not found" }, { status: 404 }),
+        perf,
+        404
+      );
     }
 
     // Decrement customer stats if linked
@@ -802,19 +876,29 @@ export async function DELETE(req: Request) {
     // Delete any associated InventoryMovement (MovementType.SALE)
     // and delete order lines & order in a single transaction
     // ---------------------------------------------------------
-    await prisma.$transaction([
-      prisma.inventoryMovement.deleteMany({ where: { orderId: id } }),
-      prisma.orderLine.deleteMany({ where: { orderId: id } }),
-      prisma.order.delete({ where: { id }, select: { id: true } }),
-    ]);
+    await perf.step("tx_delete", () =>
+      prisma.$transaction([
+        prisma.inventoryMovement.deleteMany({ where: { orderId: id } }),
+        prisma.orderLine.deleteMany({ where: { orderId: id } }),
+        prisma.order.delete({ where: { id }, select: { id: true } }),
+      ])
+    );
 
-    return NextResponse.json({
-      success: true,
-      deletedId: id,
-      message: `Order ${existingOrder.orderNumber} deleted. Stock restored to inventory.`,
-    });
+    return withPerfHeaders(
+      NextResponse.json({
+        success: true,
+        deletedId: id,
+        message: `Order ${existingOrder.orderNumber} deleted. Stock restored to inventory.`,
+      }),
+      perf,
+      200
+    );
   } catch (error) {
     console.error("Error deleting order:", error);
-    return NextResponse.json({ error: "Failed to delete order" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to delete order" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }

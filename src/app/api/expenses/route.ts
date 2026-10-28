@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { LineType, MovementType, MovementStatus, TransactionStatus } from "@prisma/client";
+import {
+  getCachedLocationId,
+  setCachedLocationId,
+  getAccountFromCache,
+  setAccountInCache,
+} from "@/lib/static-cache";
+import { startPerf, withPerfHeaders } from "@/lib/perf";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
@@ -32,7 +39,27 @@ const STANDARD_ACCOUNTS: Record<string, { name: string; type: string }> = {
   "5600": { name: "General & Administrative", type: "EXPENSE" },
 };
 
-// Map expense types to default Debit Account
+async function getOrCreateExpenseLocation(): Promise<string> {
+  const cached = getCachedLocationId();
+  if (cached) return cached;
+  let location = await prisma.inventoryLocation.findFirst({
+    where: { companyId: DEFAULT_COMPANY_ID },
+    select: { id: true },
+  });
+  if (!location) {
+    location = await prisma.inventoryLocation.create({
+      data: {
+        companyId: DEFAULT_COMPANY_ID,
+        name: "Main Storage Facility",
+        address: "Central Unit",
+        isActive: true,
+      },
+      select: { id: true },
+    });
+  }
+  setCachedLocationId(location.id);
+  return location.id;
+}
 function getDebitAccountCode(expenseType: string): string {
   switch (expenseType) {
     case "raw_materials_direct":
@@ -58,6 +85,9 @@ function getDebitAccountCode(expenseType: string): string {
 }
 
 async function ensureAccount(code: string) {
+  const cached = getAccountFromCache(code);
+  if (cached) return cached;
+
   const existing = await prisma.account.findUnique({
     where: {
       companyId_code: {
@@ -68,14 +98,17 @@ async function ensureAccount(code: string) {
     select: { id: true, code: true, name: true, type: true },
   });
 
-  if (existing) return existing;
+  if (existing) {
+    setAccountInCache(code, existing);
+    return existing;
+  }
 
   const info = STANDARD_ACCOUNTS[code] || {
     name: `Account ${code}`,
     type: code.startsWith("1") ? "ASSET" : code.startsWith("2") ? "LIABILITY" : "EXPENSE",
   };
 
-  return await prisma.account.create({
+  const created = await prisma.account.create({
     data: {
       companyId: DEFAULT_COMPANY_ID,
       code,
@@ -85,70 +118,83 @@ async function ensureAccount(code: string) {
     },
     select: { id: true, code: true, name: true, type: true },
   });
+  setAccountInCache(code, created);
+  return created;
 }
 
 export async function GET(req: Request) {
+  const perf = startPerf("GET_EXPENSES", req);
   try {
     const { searchParams } = new URL(req.url);
     const limitParam = parseInt(searchParams.get("limit") || "100");
     const limit = isNaN(limitParam) ? 100 : Math.min(Math.max(1, limitParam), 200);
 
-    // Batch query: transactions, accounts, and summary data
-    const [transactions, accounts] = await Promise.all([
-      prisma.transaction.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: {
-          id: true,
-          date: true,
-          reference: true,
-          description: true,
-          status: true,
-          createdBy: true,
-          createdAt: true,
-          lines: {
-            select: {
-              id: true,
-              type: true,
-              amountPaise: true,
-              description: true,
-              account: {
-                select: {
-                  code: true,
-                  name: true,
-                  type: true,
+    // Batch query: transactions, accounts, and DB-level grouped balances in parallel
+    const [transactions, accounts, lineAggregates] = await perf.step("db_queries", () =>
+      Promise.all([
+        prisma.transaction.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID },
+          select: {
+            id: true,
+            date: true,
+            reference: true,
+            description: true,
+            status: true,
+            createdBy: true,
+            createdAt: true,
+            lines: {
+              select: {
+                id: true,
+                type: true,
+                amountPaise: true,
+                description: true,
+                account: {
+                  select: {
+                    code: true,
+                    name: true,
+                    type: true,
+                  },
                 },
               },
             },
           },
-        },
-        orderBy: { date: "desc" },
-        take: limit,
-      }),
-      prisma.account.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: {
-          code: true,
-          name: true,
-          type: true,
-          lines: {
-            select: {
-              type: true,
-              amountPaise: true,
-            },
+          orderBy: { date: "desc" },
+          take: limit,
+        }),
+        prisma.account.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            type: true,
           },
-        },
-      }),
-    ]);
+        }),
+        prisma.transactionLine.groupBy({
+          by: ["accountId", "type"],
+          _sum: { amountPaise: true },
+        }),
+      ])
+    );
 
-    // Calculate account balances
+    // Fast O(1) balance lookup using PostgreSQL grouped aggregates
+    const balanceByAccountId = new Map<string, { DEBIT: number; CREDIT: number }>();
+    for (const agg of lineAggregates) {
+      let entry = balanceByAccountId.get(agg.accountId);
+      if (!entry) {
+        entry = { DEBIT: 0, CREDIT: 0 };
+        balanceByAccountId.set(agg.accountId, entry);
+      }
+      entry[agg.type] = agg._sum.amountPaise || 0;
+    }
+
     const accountBalances = accounts.map((acc) => {
+      const aggs = balanceByAccountId.get(acc.id) || { DEBIT: 0, CREDIT: 0 };
       let balance = 0;
-      for (const line of acc.lines) {
-        if (acc.type === "ASSET" || acc.type === "EXPENSE") {
-          balance += line.type === "DEBIT" ? line.amountPaise : -line.amountPaise;
-        } else {
-          balance += line.type === "CREDIT" ? line.amountPaise : -line.amountPaise;
-        }
+      if (acc.type === "ASSET" || acc.type === "EXPENSE") {
+        balance = aggs.DEBIT - aggs.CREDIT;
+      } else {
+        balance = aggs.CREDIT - aggs.DEBIT;
       }
       return {
         code: acc.code,
@@ -224,7 +270,7 @@ export async function GET(req: Request) {
       };
     });
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       journals: formattedJournals,
       accounts: accountBalances,
       summary: {
@@ -234,13 +280,19 @@ export async function GET(req: Request) {
         monthlyExpenses,
       },
     });
+    return withPerfHeaders(res, perf, 200);
   } catch (error) {
     console.error("Error fetching expenses:", error);
-    return NextResponse.json({ error: "Failed to fetch expenses" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to fetch expenses" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
 export async function POST(req: Request) {
+  const perf = startPerf("POST_EXPENSE", req);
   try {
     const session = await auth();
     const body = await req.json();
@@ -265,16 +317,6 @@ export async function POST(req: Request) {
 
     const createdBy = session?.user?.name || "Finance Manager";
 
-    // Ensure company exists
-    await prisma.company.upsert({
-      where: { id: DEFAULT_COMPANY_ID },
-      update: {},
-      create: {
-        id: DEFAULT_COMPANY_ID,
-        name: "Vedro Food Products",
-      },
-    });
-
     // 1. Double Entry Manual Journal Mode
     if (manualLines && Array.isArray(manualLines) && manualLines.length >= 2) {
       let totalDebitPaise = 0;
@@ -287,9 +329,13 @@ export async function POST(req: Request) {
       }
 
       if (totalDebitPaise !== totalCreditPaise || totalDebitPaise <= 0) {
-        return NextResponse.json(
-          { error: "Double entry error: Debits and Credits must balance and be greater than 0" },
-          { status: 400 }
+        return withPerfHeaders(
+          NextResponse.json(
+            { error: "Double entry error: Debits and Credits must balance and be greater than 0" },
+            { status: 400 }
+          ),
+          perf,
+          400
         );
       }
 
@@ -308,36 +354,46 @@ export async function POST(req: Request) {
         });
       }
 
-      const transaction = await prisma.transaction.create({
-        data: {
-          companyId: DEFAULT_COMPANY_ID,
-          date: txDate,
-          reference,
-          description,
-          status: TransactionStatus.POSTED,
-          createdBy,
-          postedBy: createdBy,
-          postedAt: new Date(),
-          lines: { create: lineCreates },
-        },
-        select: {
-          id: true,
-          reference: true,
-          date: true,
-        },
-      });
+      const transaction = await perf.step("tx_create_manual", () =>
+        prisma.transaction.create({
+          data: {
+            companyId: DEFAULT_COMPANY_ID,
+            date: txDate,
+            reference,
+            description,
+            status: TransactionStatus.POSTED,
+            createdBy,
+            postedBy: createdBy,
+            postedAt: new Date(),
+            lines: { create: lineCreates },
+          },
+          select: {
+            id: true,
+            reference: true,
+            date: true,
+          },
+        })
+      );
 
-      return NextResponse.json({
-        success: true,
-        transaction,
-        reference,
-      });
+      return withPerfHeaders(
+        NextResponse.json({
+          success: true,
+          transaction,
+          reference,
+        }),
+        perf,
+        200
+      );
     }
 
     // 2. Quick Expense Mode
     const amountFloat = parseFloat(amountRupees);
     if (isNaN(amountFloat) || amountFloat <= 0) {
-      return NextResponse.json({ error: "Please enter a valid amount greater than ₹0" }, { status: 400 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Please enter a valid amount greater than ₹0" }, { status: 400 }),
+        perf,
+        400
+      );
     }
 
     const amountPaise = Math.round(amountFloat * 100);
@@ -354,59 +410,43 @@ export async function POST(req: Request) {
       Varunesh: "3030",
     };
 
-    let partnerRecord = null;
-    let partnerCapitalRecord = null;
-
     const txDate = new Date(date || Date.now());
     const reference = (invoiceRef && invoiceRef.trim()) || `EXP-${Date.now().toString().slice(-6)}`;
 
-    // If a partner paid from their personal funds, credit their capital account and record capital introduced
+    // Resolve partner & accounts in parallel
+    const [debitAcc, creditAcc, partnerRecord] = await perf.step("lookup_prep", () =>
+      Promise.all([
+        ensureAccount(debitAccountCode),
+        ensureAccount(
+          paidByPartner && partnerEquityCodes[paidByPartner]
+            ? partnerEquityCodes[paidByPartner]
+            : creditAccountCode
+        ),
+        paidByPartner && partnerEquityCodes[paidByPartner]
+          ? prisma.partner.upsert({
+              where: {
+                companyId_name: {
+                  companyId: DEFAULT_COMPANY_ID,
+                  name: paidByPartner,
+                },
+              },
+              update: {},
+              create: {
+                companyId: DEFAULT_COMPANY_ID,
+                name: paidByPartner,
+                email: `${paidByPartner.toLowerCase()}@vedro.com`,
+                isActive: true,
+              },
+              select: { id: true },
+            })
+          : null,
+      ])
+    );
+
     if (paidByPartner && partnerEquityCodes[paidByPartner]) {
       creditAccountCode = partnerEquityCodes[paidByPartner];
       creditDescription = `Paid by Partner ${paidByPartner} from personal funds (Added to Capital)`;
-
-      // Ensure partner exists in DB
-      partnerRecord = await prisma.partner.upsert({
-        where: {
-          companyId_name: {
-            companyId: DEFAULT_COMPANY_ID,
-            name: paidByPartner,
-          },
-        },
-        update: {},
-        create: {
-          companyId: DEFAULT_COMPANY_ID,
-          name: paidByPartner,
-          email: `${paidByPartner.toLowerCase()}@vedro.com`,
-          isActive: true,
-        },
-      });
-
-      const entryNarration =
-        (narration && narration.trim()) ||
-        `Out-of-pocket expense payment for ${supplierName || "supplier"}`;
-
-      // Record capital introduced entry
-      partnerCapitalRecord = await prisma.partnerCapital.create({
-        data: {
-          companyId: DEFAULT_COMPANY_ID,
-          partnerId: partnerRecord.id,
-          date: txDate,
-          amountPaise,
-          type: "CAPITAL_INTRODUCED",
-          reason: `Paid Expense: ${entryNarration} (Ref: ${reference})`,
-          paymentMethod: "PERSONAL_FUNDS",
-          reference,
-          notes: `Paid out-of-pocket by partner ${paidByPartner} for company expense`,
-          createdBy,
-        },
-      });
     }
-
-    const [debitAcc, creditAcc] = await Promise.all([
-      ensureAccount(debitAccountCode),
-      ensureAccount(creditAccountCode),
-    ]);
 
     const finalNarration =
       (narration && narration.trim()) ||
@@ -414,148 +454,158 @@ export async function POST(req: Request) {
         paidByPartner ? ` [Paid by ${paidByPartner}]` : ""
       }`;
 
-    // Run transaction & inventory creation
-    const transaction = await prisma.transaction.create({
-      data: {
-        companyId: DEFAULT_COMPANY_ID,
-        date: txDate,
-        reference,
-        description: finalNarration,
-        status: TransactionStatus.POSTED,
-        createdBy,
-        postedBy: createdBy,
-        postedAt: new Date(),
-        lines: {
-          create: [
-            {
-              accountId: debitAcc.id,
-              type: LineType.DEBIT,
-              amountPaise,
-              description: supplierName ? `Purchased from ${supplierName}` : undefined,
-            },
-            {
-              accountId: creditAcc.id,
-              type: LineType.CREDIT,
-              amountPaise,
-              description: creditDescription,
-            },
-          ],
-        },
-      },
-      select: {
-        id: true,
-        reference: true,
-        date: true,
-      },
-    });
-
-    let updatedProduct = null;
-    let inventoryMovement = null;
-
-    // 3. Auto-update Inventory Stock if SKU was specified
+    // Resolve product and location if SKU specified
     const qty = parseInt(quantity) || 0;
+    let targetProduct: any = null;
+    let locationId: string | null = null;
+    const unitCostFloat = parseFloat(unitCostRupees);
+    const unitCostPaise =
+      !isNaN(unitCostFloat) && unitCostFloat > 0
+        ? Math.round(unitCostFloat * 100)
+        : qty > 0
+        ? Math.round(amountPaise / qty)
+        : 0;
+
     if (sku && qty > 0 && updateInventory) {
-      // Find or create product
-      let product = await prisma.product.findUnique({
+      const trimmedSku = sku.trim().toUpperCase();
+      targetProduct = await prisma.product.findUnique({
         where: {
           companyId_sku: {
             companyId: DEFAULT_COMPANY_ID,
-            sku: sku.trim().toUpperCase(),
+            sku: trimmedSku,
           },
         },
+        select: { id: true, sku: true, name: true, costPricePaise: true },
       });
 
-      if (!product) {
-        // Find in default catalog
-        const catalogItem = [
-          { sku: "VED-GHEE-250ML", name: "Pure A2 Desi Cow Bilona Ghee 250ml", unit: "JAR", costPricePaise: 28000, sellingPricePaise: 39900 },
-          { sku: "VED-GHEE-500ML", name: "Pure A2 Desi Cow Bilona Ghee 500ml", unit: "JAR", costPricePaise: 55000, sellingPricePaise: 74900 },
-          { sku: "VED-GHEE-1LTR", name: "Pure A2 Desi Cow Bilona Ghee 1 Litre", unit: "JAR", costPricePaise: 105000, sellingPricePaise: 144900 },
-          { sku: "VED-OIL-300ML", name: "Cold-Pressed Kachi Ghani Mustard Oil 300ml", unit: "BOTTLE", costPricePaise: 6000, sellingPricePaise: 8900 },
-          { sku: "VED-OIL-500ML", name: "Cold-Pressed Kachi Ghani Mustard Oil 500ml", unit: "BOTTLE", costPricePaise: 9500, sellingPricePaise: 13900 },
-          { sku: "VED-OIL-1LTR", name: "Cold-Pressed Kachi Ghani Mustard Oil 1 Litre", unit: "BOTTLE", costPricePaise: 17500, sellingPricePaise: 24900 },
-          { sku: "VED-OIL-2LTR", name: "Cold-Pressed Kachi Ghani Mustard Oil 2 Litre", unit: "CAN", costPricePaise: 34000, sellingPricePaise: 47900 },
-          { sku: "VED-OIL-5LTR", name: "Cold-Pressed Kachi Ghani Mustard Oil 5 Litre", unit: "TIN", costPricePaise: 82000, sellingPricePaise: 114900 },
-          { sku: "VED-JAG-500GM", name: "Natural Chemical-Free Organic Jaggery 500g", unit: "POUCH", costPricePaise: 4500, sellingPricePaise: 6900 },
-          { sku: "VED-JAG-1KG", name: "Natural Chemical-Free Organic Jaggery 1kg", unit: "POUCH", costPricePaise: 8000, sellingPricePaise: 12500 },
-        ].find((c) => c.sku === sku.trim().toUpperCase());
-
-        product = await prisma.product.create({
+      if (!targetProduct) {
+        targetProduct = await prisma.product.create({
           data: {
             companyId: DEFAULT_COMPANY_ID,
-            sku: sku.trim().toUpperCase(),
-            name: catalogItem?.name || `Product ${sku}`,
-            unit: catalogItem?.unit || "PCS",
-            costPricePaise: catalogItem?.costPricePaise || Math.round((amountPaise / qty)),
-            sellingPricePaise: catalogItem?.sellingPricePaise || Math.round((amountPaise / qty) * 1.4),
+            sku: trimmedSku,
+            name: `Product ${trimmedSku}`,
+            unit: "PCS",
+            costPricePaise: unitCostPaise,
+            sellingPricePaise: Math.round(unitCostPaise * 1.4),
             isActive: true,
           },
+          select: { id: true, sku: true, name: true, costPricePaise: true },
         });
       }
 
-      // Ensure storage location
-      let location = await prisma.inventoryLocation.findFirst({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: { id: true },
-      });
-
-      if (!location) {
-        location = await prisma.inventoryLocation.create({
-          data: {
-            companyId: DEFAULT_COMPANY_ID,
-            name: "Main Storage Facility",
-            address: "Central Unit",
-            isActive: true,
-          },
-          select: { id: true },
-        });
-      }
-
-      const unitCostFloat = parseFloat(unitCostRupees);
-      const unitCostPaise = !isNaN(unitCostFloat) && unitCostFloat > 0
-        ? Math.round(unitCostFloat * 100)
-        : Math.round(amountPaise / qty);
-
-      // Create Inventory Movement (PURCHASE)
-      inventoryMovement = await prisma.inventoryMovement.create({
-        data: {
-          companyId: DEFAULT_COMPANY_ID,
-          productId: product.id,
-          locationId: location.id,
-          type: MovementType.PURCHASE,
-          status: MovementStatus.APPROVED,
-          quantity: qty,
-          costPricePaise: unitCostPaise,
-          reference: reference,
-          reason: supplierName ? `Purchased from ${supplierName}` : "Raw material / Stock purchase",
-          createdBy,
-        },
-        select: {
-          id: true,
-          quantity: true,
-          type: true,
-          status: true,
-        },
-      });
-
-      // Update product unit cost if provided
-      if (unitCostPaise > 0) {
-        updatedProduct = await prisma.product.update({
-          where: { id: product.id },
-          data: { costPricePaise: unitCostPaise },
-          select: {
-            id: true,
-            sku: true,
-            name: true,
-            costPricePaise: true,
-          },
-        });
-      } else {
-        updatedProduct = product;
-      }
+      locationId = await getOrCreateExpenseLocation();
     }
 
-    return NextResponse.json({
+    // Atomic transaction: ledger entry, partner capital, and inventory movement
+    const { transaction, partnerCapitalRecord, inventoryMovement, updatedProduct } =
+      await perf.step("tx_atomic_expense", () =>
+        prisma.$transaction(async (tx) => {
+          let capitalRec = null;
+          if (partnerRecord) {
+            const entryNarration =
+              (narration && narration.trim()) ||
+              `Out-of-pocket expense payment for ${supplierName || "supplier"}`;
+            capitalRec = await tx.partnerCapital.create({
+              data: {
+                companyId: DEFAULT_COMPANY_ID,
+                partnerId: partnerRecord.id,
+                date: txDate,
+                amountPaise,
+                type: "CAPITAL_INTRODUCED",
+                reason: `Paid Expense: ${entryNarration} (Ref: ${reference})`,
+                paymentMethod: "PERSONAL_FUNDS",
+                reference,
+                notes: `Paid out-of-pocket by partner ${paidByPartner} for company expense`,
+                createdBy,
+              },
+            });
+          }
+
+          const txRecord = await tx.transaction.create({
+            data: {
+              companyId: DEFAULT_COMPANY_ID,
+              date: txDate,
+              reference,
+              description: finalNarration,
+              status: TransactionStatus.POSTED,
+              createdBy,
+              postedBy: createdBy,
+              postedAt: new Date(),
+              lines: {
+                create: [
+                  {
+                    accountId: debitAcc.id,
+                    type: LineType.DEBIT,
+                    amountPaise,
+                    description: supplierName ? `Purchased from ${supplierName}` : undefined,
+                  },
+                  {
+                    accountId: creditAcc.id,
+                    type: LineType.CREDIT,
+                    amountPaise,
+                    description: creditDescription,
+                  },
+                ],
+              },
+            },
+            select: {
+              id: true,
+              reference: true,
+              date: true,
+            },
+          });
+
+          let invMovement = null;
+          let prodUpdated = targetProduct;
+
+          if (targetProduct && locationId && qty > 0) {
+            invMovement = await tx.inventoryMovement.create({
+              data: {
+                companyId: DEFAULT_COMPANY_ID,
+                productId: targetProduct.id,
+                locationId,
+                type: MovementType.PURCHASE,
+                status: MovementStatus.APPROVED,
+                quantity: qty,
+                costPricePaise: unitCostPaise,
+                reference,
+                reason: supplierName
+                  ? `Purchased from ${supplierName}`
+                  : "Raw material / Stock purchase",
+                createdBy,
+              },
+              select: {
+                id: true,
+                quantity: true,
+                type: true,
+                status: true,
+              },
+            });
+
+            if (unitCostPaise > 0) {
+              prodUpdated = await tx.product.update({
+                where: { id: targetProduct.id },
+                data: { costPricePaise: unitCostPaise },
+                select: {
+                  id: true,
+                  sku: true,
+                  name: true,
+                  costPricePaise: true,
+                },
+              });
+            }
+          }
+
+          return {
+            transaction: txRecord,
+            partnerCapitalRecord: capitalRec,
+            inventoryMovement: invMovement,
+            updatedProduct: prodUpdated,
+          };
+        })
+      );
+
+    const res = NextResponse.json({
       success: true,
       transaction,
       reference,
@@ -568,8 +618,13 @@ export async function POST(req: Request) {
           : ""
       }${qty > 0 ? ` Added ${qty} units of ${sku} to inventory.` : ""}`,
     });
+    return withPerfHeaders(res, perf, 201);
   } catch (error) {
     console.error("Error creating expense:", error);
-    return NextResponse.json({ error: "Failed to record expense" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to record expense" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }

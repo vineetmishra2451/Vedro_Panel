@@ -118,9 +118,13 @@ export default function FinancePage() {
       }
     }
 
-    const cachedProducts = getCachedData<any[]>("products");
-    if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
-      setAvailableProducts(cachedProducts);
+    const cachedProducts = getCachedData<any>("products");
+    if (cachedProducts) {
+      if (Array.isArray(cachedProducts.products) && cachedProducts.products.length > 0) {
+        setAvailableProducts(cachedProducts.products);
+      } else if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+        setAvailableProducts(cachedProducts);
+      }
     }
 
     // 2. Fetch fresh expenses & accounts from database
@@ -150,8 +154,8 @@ export default function FinancePage() {
           const data = await res.json();
           if (Array.isArray(data.products)) {
             setAvailableProducts(data.products);
-            setCachedData("products", data.products);
           }
+          setCachedData("products", data);
         }
       } catch (err) {
         console.error("Failed to load products for inventory linkage:", err);

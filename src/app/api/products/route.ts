@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { MovementType, MovementStatus } from "@prisma/client";
+import {
+  isProductsSeeded,
+  setProductsSeeded,
+  getCachedLocationId,
+  setCachedLocationId,
+} from "@/lib/static-cache";
+import { startPerf, withPerfHeaders } from "@/lib/perf";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
@@ -120,6 +127,8 @@ export const DEFAULT_CATALOG = [
 ];
 
 export async function ensureDefaultProducts() {
+  if (isProductsSeeded()) return;
+
   const count = await prisma.product.count({
     where: { companyId: DEFAULT_COMPANY_ID },
   });
@@ -158,74 +167,78 @@ export async function ensureDefaultProducts() {
       });
     }
   }
+  setProductsSeeded();
 }
 
 export async function GET(req: Request) {
+  const perf = startPerf("GET_PRODUCTS", req);
   try {
     const { searchParams } = new URL(req.url);
     const category = searchParams.get("category");
     const search = searchParams.get("search");
 
-    // Ensure catalog products exist
-    await ensureDefaultProducts();
+    // Ensure catalog products exist (cached in-memory for warm lambdas)
+    await perf.step("bootstrap", () => ensureDefaultProducts());
 
     // Batch query products and stock movements in parallel
-    const [dbProducts, movements] = await Promise.all([
-      prisma.product.findMany({
-        where: {
-          companyId: DEFAULT_COMPANY_ID,
-          isActive: true,
-          ...(category && category !== "ALL"
-            ? { category: { name: { contains: category, mode: "insensitive" } } }
-            : {}),
-          ...(search
-            ? {
-                OR: [
-                  { name: { contains: search, mode: "insensitive" } },
-                  { sku: { contains: search, mode: "insensitive" } },
-                ],
-              }
-            : {}),
-        },
-        select: {
-          id: true,
-          sku: true,
-          name: true,
-          unit: true,
-          hsnCode: true,
-          costPricePaise: true,
-          sellingPricePaise: true,
-          reorderLevel: true,
-          isActive: true,
-          category: { select: { name: true } },
-          taxCode: { select: { cgstRate: true, sgstRate: true, igstRate: true } },
-          inventoryMovements: {
-            where: { status: "APPROVED" },
-            select: {
-              type: true,
-              quantity: true,
+    const [dbProducts, movements] = await perf.step("db_queries", () =>
+      Promise.all([
+        prisma.product.findMany({
+          where: {
+            companyId: DEFAULT_COMPANY_ID,
+            isActive: true,
+            ...(category && category !== "ALL"
+              ? { category: { name: { contains: category, mode: "insensitive" } } }
+              : {}),
+            ...(search
+              ? {
+                  OR: [
+                    { name: { contains: search, mode: "insensitive" } },
+                    { sku: { contains: search, mode: "insensitive" } },
+                  ],
+                }
+              : {}),
+          },
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+            unit: true,
+            hsnCode: true,
+            costPricePaise: true,
+            sellingPricePaise: true,
+            reorderLevel: true,
+            isActive: true,
+            category: { select: { name: true } },
+            taxCode: { select: { cgstRate: true, sgstRate: true, igstRate: true } },
+            inventoryMovements: {
+              where: { status: "APPROVED" },
+              select: {
+                type: true,
+                quantity: true,
+              },
             },
           },
-        },
-        orderBy: { sku: "asc" },
-      }),
-      prisma.inventoryMovement.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: {
-          id: true,
-          type: true,
-          status: true,
-          quantity: true,
-          costPricePaise: true,
-          reference: true,
-          reason: true,
-          createdAt: true,
-          product: { select: { sku: true, name: true, unit: true } },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      }),
-    ]);
+          orderBy: { sku: "asc" },
+        }),
+        prisma.inventoryMovement.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID },
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            quantity: true,
+            costPricePaise: true,
+            reference: true,
+            reason: true,
+            createdAt: true,
+            product: { select: { sku: true, name: true, unit: true } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        }),
+      ])
+    );
 
     // Calculate dynamic available stock for each product
     let totalInventoryValuePaise = 0;
@@ -287,15 +300,20 @@ export async function GET(req: Request) {
       createdAt: m.createdAt.toISOString(),
     }));
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       products: formattedProducts,
       movements: formattedMovements,
       totalInventoryValuePaise,
       totalUnitsInStock,
     });
+    return withPerfHeaders(res, perf, 200);
   } catch (error) {
     console.error("Error fetching products:", error);
-    return NextResponse.json({ error: "Failed to fetch products" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to fetch products" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
@@ -336,21 +354,26 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: `Product with SKU "${productSku}" not found` }, { status: 404 });
       }
 
-      let location = await prisma.inventoryLocation.findFirst({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: { id: true },
-      });
-
-      if (!location) {
-        location = await prisma.inventoryLocation.create({
-          data: {
-            companyId: DEFAULT_COMPANY_ID,
-            name: "Main Storage Facility",
-            address: "Central Unit",
-            isActive: true,
-          },
+      let locationId = getCachedLocationId();
+      if (!locationId) {
+        let location = await prisma.inventoryLocation.findFirst({
+          where: { companyId: DEFAULT_COMPANY_ID },
           select: { id: true },
         });
+
+        if (!location) {
+          location = await prisma.inventoryLocation.create({
+            data: {
+              companyId: DEFAULT_COMPANY_ID,
+              name: "Main Storage Facility",
+              address: "Central Unit",
+              isActive: true,
+            },
+            select: { id: true },
+          });
+        }
+        locationId = location.id;
+        setCachedLocationId(locationId);
       }
 
       const unitCost = parseFloat(unitCostRupees);
@@ -362,7 +385,7 @@ export async function POST(req: Request) {
         data: {
           companyId: DEFAULT_COMPANY_ID,
           productId: targetProduct.id,
-          locationId: location.id,
+          locationId: locationId,
           type: (type as MovementType) || MovementType.PURCHASE,
           status: MovementStatus.APPROVED,
           quantity: qty,
@@ -416,22 +439,27 @@ export async function POST(req: Request) {
       );
     }
 
-    // Ensure location
-    let location = await prisma.inventoryLocation.findFirst({
-      where: { companyId: DEFAULT_COMPANY_ID },
-      select: { id: true },
-    });
-
-    if (!location) {
-      location = await prisma.inventoryLocation.create({
-        data: {
-          companyId: DEFAULT_COMPANY_ID,
-          name: "Main Storage Facility",
-          address: "Central Unit",
-          isActive: true,
-        },
+    // Ensure location (cached in-memory)
+    let locationId = getCachedLocationId();
+    if (!locationId) {
+      let location = await prisma.inventoryLocation.findFirst({
+        where: { companyId: DEFAULT_COMPANY_ID },
         select: { id: true },
       });
+
+      if (!location) {
+        location = await prisma.inventoryLocation.create({
+          data: {
+            companyId: DEFAULT_COMPANY_ID,
+            name: "Main Storage Facility",
+            address: "Central Unit",
+            isActive: true,
+          },
+          select: { id: true },
+        });
+      }
+      locationId = location.id;
+      setCachedLocationId(locationId);
     }
 
     const createdProduct = await prisma.product.create({
@@ -451,7 +479,7 @@ export async function POST(req: Request) {
                 create: [
                   {
                     companyId: DEFAULT_COMPANY_ID,
-                    locationId: location.id,
+                    locationId: locationId,
                     type: MovementType.OPENING,
                     status: MovementStatus.APPROVED,
                     quantity: initialQty,

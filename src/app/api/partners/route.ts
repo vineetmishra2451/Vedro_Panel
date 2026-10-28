@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { PartnerTxnType } from "@prisma/client";
+import { isPartnersEnsured, setPartnersEnsured } from "@/lib/static-cache";
+import { startPerf, withPerfHeaders } from "@/lib/perf";
 
 const DEFAULT_COMPANY_ID = "vedro-company-main";
 
@@ -12,6 +14,8 @@ const DEFAULT_PARTNERS = [
 ];
 
 async function ensurePartners() {
+  if (isPartnersEnsured()) return;
+
   // Ensure company exists
   await prisma.company.upsert({
     where: { id: DEFAULT_COMPANY_ID },
@@ -22,9 +26,8 @@ async function ensurePartners() {
     },
   });
 
-  const dbPartners = [];
   for (const p of DEFAULT_PARTNERS) {
-    const partner = await prisma.partner.upsert({
+    await prisma.partner.upsert({
       where: {
         companyId_name: {
           companyId: DEFAULT_COMPANY_ID,
@@ -39,47 +42,49 @@ async function ensurePartners() {
         isActive: true,
       },
     });
-    dbPartners.push(partner);
   }
-  return dbPartners;
+  setPartnersEnsured();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const perf = startPerf("GET_PARTNERS", req);
   try {
-    await ensurePartners();
+    await perf.step("bootstrap", () => ensurePartners());
 
-    const [partners, capitalEntries] = await Promise.all([
-      prisma.partner.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID, isActive: true },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          phone: true,
-          createdAt: true,
-        },
-        orderBy: { name: "asc" },
-      }),
-      prisma.partnerCapital.findMany({
-        where: { companyId: DEFAULT_COMPANY_ID },
-        select: {
-          id: true,
-          partnerId: true,
-          date: true,
-          amountPaise: true,
-          type: true,
-          reason: true,
-          paymentMethod: true,
-          reference: true,
-          notes: true,
-          createdAt: true,
-          partner: {
-            select: { name: true },
+    const [partners, capitalEntries] = await perf.step("db_queries", () =>
+      Promise.all([
+        prisma.partner.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID, isActive: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            createdAt: true,
           },
-        },
-        orderBy: { date: "desc" },
-      }),
-    ]);
+          orderBy: { name: "asc" },
+        }),
+        prisma.partnerCapital.findMany({
+          where: { companyId: DEFAULT_COMPANY_ID },
+          select: {
+            id: true,
+            partnerId: true,
+            date: true,
+            amountPaise: true,
+            type: true,
+            reason: true,
+            paymentMethod: true,
+            reference: true,
+            notes: true,
+            createdAt: true,
+            partner: {
+              select: { name: true },
+            },
+          },
+          orderBy: { date: "desc" },
+        }),
+      ])
+    );
 
     const formattedEntries = capitalEntries.map((e) => ({
       id: e.id,
@@ -117,19 +122,25 @@ export async function GET() {
 
     const totalCapitalPaise = partnerStats.reduce((acc, p) => acc + p.netBalance, 0);
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       partners,
       entries: formattedEntries,
       partnerStats,
       totalCapitalPaise,
     });
+    return withPerfHeaders(res, perf, 200);
   } catch (error) {
     console.error("Error fetching partners capital:", error);
-    return NextResponse.json({ error: "Failed to fetch partners capital" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to fetch partners capital" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }
 
 export async function POST(req: Request) {
+  const perf = startPerf("POST_PARTNER_CAPITAL", req);
   try {
     const session = await auth();
     const body = await req.json();
@@ -146,64 +157,78 @@ export async function POST(req: Request) {
     } = body;
 
     if (!partnerName) {
-      return NextResponse.json({ error: "Partner name is required" }, { status: 400 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Partner name is required" }, { status: 400 }),
+        perf,
+        400
+      );
     }
 
     const rupees = parseFloat(amountRupees);
     if (isNaN(rupees) || rupees <= 0) {
-      return NextResponse.json({ error: "Please enter a valid amount greater than ₹0" }, { status: 400 });
+      return withPerfHeaders(
+        NextResponse.json({ error: "Please enter a valid amount greater than ₹0" }, { status: 400 }),
+        perf,
+        400
+      );
     }
 
     const isNegative = type === "WITHDRAWAL" || type === "LOAN_REPAYMENT";
     const amountPaise = Math.round(rupees * 100) * (isNegative ? -1 : 1);
 
-    // Find partner
-    let partner = await prisma.partner.findFirst({
-      where: {
-        companyId: DEFAULT_COMPANY_ID,
-        name: { equals: partnerName, mode: "insensitive" },
-      },
-    });
+    // Find or create partner
+    let partner = await perf.step("lookup_partner", () =>
+      prisma.partner.findFirst({
+        where: {
+          companyId: DEFAULT_COMPANY_ID,
+          name: { equals: partnerName, mode: "insensitive" },
+        },
+      })
+    );
 
     if (!partner) {
-      partner = await prisma.partner.create({
-        data: {
-          companyId: DEFAULT_COMPANY_ID,
-          name: partnerName,
-          email: `${partnerName.toLowerCase()}@vedro.com`,
-          isActive: true,
-        },
-      });
+      partner = await perf.step("create_partner", () =>
+        prisma.partner.create({
+          data: {
+            companyId: DEFAULT_COMPANY_ID,
+            name: partnerName,
+            email: `${partnerName.toLowerCase()}@vedro.com`,
+            isActive: true,
+          },
+        })
+      );
     }
 
     const createdBy = session?.user?.name || "System";
     const refNumber = reference || `CAP-${Date.now().toString().slice(-6)}`;
 
-    const entry = await prisma.partnerCapital.create({
-      data: {
-        companyId: DEFAULT_COMPANY_ID,
-        partnerId: partner.id,
-        date: new Date(date || Date.now()),
-        amountPaise,
-        type: type as PartnerTxnType,
-        reason: reason || "Partner Capital Introduction",
-        paymentMethod,
-        reference: refNumber,
-        notes: notes || null,
-        createdBy,
-      },
-      select: {
-        id: true,
-        date: true,
-        amountPaise: true,
-        type: true,
-        reason: true,
-        reference: true,
-        createdAt: true,
-      },
-    });
+    const entry = await perf.step("create_capital_entry", () =>
+      prisma.partnerCapital.create({
+        data: {
+          companyId: DEFAULT_COMPANY_ID,
+          partnerId: partner.id,
+          date: new Date(date || Date.now()),
+          amountPaise,
+          type: type as PartnerTxnType,
+          reason: reason || "Partner Capital Introduction",
+          paymentMethod,
+          reference: refNumber,
+          notes: notes || null,
+          createdBy,
+        },
+        select: {
+          id: true,
+          date: true,
+          amountPaise: true,
+          type: true,
+          reason: true,
+          reference: true,
+          createdAt: true,
+        },
+      })
+    );
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       success: true,
       entry: {
         ...entry,
@@ -212,8 +237,13 @@ export async function POST(req: Request) {
         createdAt: entry.createdAt.toISOString(),
       },
     });
+    return withPerfHeaders(res, perf, 201);
   } catch (error) {
     console.error("Error creating partner capital entry:", error);
-    return NextResponse.json({ error: "Failed to create partner capital entry" }, { status: 500 });
+    return withPerfHeaders(
+      NextResponse.json({ error: "Failed to create partner capital entry" }, { status: 500 }),
+      perf,
+      500
+    );
   }
 }

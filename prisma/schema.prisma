@@ -316,6 +316,7 @@ model TransactionLine {
 
   @@index([transactionId])
   @@index([accountId])
+  @@index([accountId, type])
   @@index([type])
   @@index([amountPaise])
   @@index([createdAt])
@@ -473,6 +474,7 @@ model Product {
   inventoryMovements InventoryMovement[]
 
   @@unique([companyId, sku])
+  @@index([companyId, isActive])
   @@index([companyId])
   @@index([sku])
   @@index([name])
@@ -692,10 +694,12 @@ model InventoryMovement {
   location       InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
 
   @@index([companyId, productId])
+  @@index([companyId, productId, status])
   @@index([companyId, type])
   @@index([companyId])
   @@index([productId])
   @@index([locationId])
+  @@index([orderId])
   @@index([type])
   @@index([status])
   @@index([createdAt])
