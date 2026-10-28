@@ -137,6 +137,7 @@ model Company {
   campaigns          Campaign[]
   adPerformanceDaily AdPerformanceDaily[]
   orderAttributions  OrderAttribution[]
+  customerFeedbacks  CustomerFeedback[]
 
   @@index([name])
   @@index([gstin])
@@ -992,4 +993,33 @@ model AuditLog {
   @@index([entityId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+model CustomerFeedback {
+  id                  String   @id @default(cuid())
+  companyId           String   @default("vedro-company-main")
+  customerName        String?
+  customerPhone       String?
+  customerEmail       String?
+  city                String?
+
+  // The 8 customer feedback questions:
+  overallQuality      String   // Excellent | Good | Average | Poor | Very Poor
+  naturalAroma        String   // Very Satisfied | Satisfied | Neutral | Dissatisfied | Very Dissatisfied
+  tasteAndFlavour     String   // Excellent | Good | Average | Poor | Very Poor
+  colourTexture       String   // Very Satisfied | Satisfied | Neutral | Dissatisfied | Very Dissatisfied
+  cookingPerformance  String   // Excellent | Good | Average | Poor | Very Poor
+  packagingQuality    String   // Very Satisfied | Satisfied | Neutral | Dissatisfied | Very Dissatisfied
+  issuesNoticed       String   // No issues | Aroma or taste | Colour or consistency | Packaging or leakage | Other
+  issuesDetails       String?
+  repurchaseRecommend String   // Definitely | Probably | Not Sure | Probably Not | Definitely Not
+
+  additionalComments  String?
+  source              String   @default("WEB_FORM")
+  createdAt           DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@map("customer_feedbacks")
 }

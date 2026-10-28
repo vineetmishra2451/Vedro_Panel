@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   UserCheck,
   Plus,
@@ -18,6 +19,13 @@ import {
   Pencil,
   Trash2,
   AlertTriangle,
+  MessageSquare,
+  ExternalLink,
+  Copy,
+  Check,
+  Award,
+  Sparkles,
+  Flame,
 } from "lucide-react";
 import { KpiCard } from "@/components/shared/kpi-card";
 import { MoneyDisplay } from "@/components/shared/money-display";
@@ -75,6 +83,38 @@ export default function CustomersPage() {
   // Delete Customer State
   const [deleteConfirmCustomer, setDeleteConfirmCustomer] = useState<CustomerRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Customer Feedback Modal State
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [feedbacks, setFeedbacks] = useState<any[]>([]);
+  const [feedbackMetrics, setFeedbackMetrics] = useState<any>(null);
+  const [loadingFeedbacks, setLoadingFeedbacks] = useState(false);
+
+  const loadFeedbacks = async () => {
+    try {
+      setLoadingFeedbacks(true);
+      const res = await fetch("/api/feedback?limit=100");
+      if (res.ok) {
+        const data = await res.json();
+        setFeedbacks(data.feedbacks || []);
+        setFeedbackMetrics(data.metrics || null);
+      }
+    } catch (err) {
+      console.error("Failed to load feedbacks:", err);
+    } finally {
+      setLoadingFeedbacks(false);
+    }
+  };
+
+  const handleCopyFeedbackLink = () => {
+    if (typeof window !== "undefined") {
+      const url = `${window.location.origin}/feedback`;
+      navigator.clipboard.writeText(url);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    }
+  };
 
   // Form state
   const [formData, setFormData] = useState({
@@ -345,13 +385,56 @@ export default function CustomersPage() {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>+ Add Customer</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleCopyFeedbackLink}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#493020] bg-[#FCFAF3] hover:bg-[#F2EBD8] border border-[#E8E2D5] rounded-lg transition-colors shadow-xs active:scale-95"
+            title="Copy public feedback link to share on WhatsApp or SMS"
+          >
+            {copiedLink ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-emerald-700 font-bold">Link Copied!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5 text-[#77736A]" />
+                <span>Copy Feedback Link</span>
+              </>
+            )}
+          </button>
+
+          <Link
+            href="/feedback"
+            target="_blank"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#493020] bg-white hover:bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg transition-colors shadow-xs"
+            title="Open customer-facing feedback form in a new tab"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-[#E4BF22]" />
+            <span>Open Feedback Form</span>
+            <ExternalLink className="w-3 h-3 text-[#77736A]" />
+          </Link>
+
+          <button
+            onClick={() => {
+              setIsFeedbackModalOpen(true);
+              loadFeedbacks();
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#493020] bg-white hover:bg-[#FCFAF3] border border-[#E8E2D5] rounded-lg transition-colors shadow-xs"
+            title="View customer quality ratings & feedback submissions"
+          >
+            <Award className="w-3.5 h-3.5 text-[#E4BF22]" />
+            <span>Feedbacks {feedbacks.length > 0 ? `(${feedbacks.length})` : ""}</span>
+          </button>
+
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] font-bold rounded-lg transition-colors shadow-xs"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>+ Add Customer</span>
+          </button>
+        </div>
       </div>
 
       {successMessage && (
@@ -1000,6 +1083,201 @@ export default function CustomersPage() {
               >
                 {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>{isDeleting ? "Deleting..." : "Delete Customer"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Feedback Responses Modal */}
+      {isFeedbackModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#493020]/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-[#E8E2D5] overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-[#E8E2D5] flex items-center justify-between bg-[#FCFAF3]">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#E4BF22]/20 border border-[#E4BF22]/40 flex items-center justify-center text-[#493020]">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#493020]">
+                    Vedro Mustard Oil Customer Feedback
+                  </h3>
+                  <p className="text-xs text-[#77736A]">
+                    Customer ratings across aroma, quality, taste, texture, packaging, and repurchase intent
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/feedback"
+                  target="_blank"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#493020] bg-white border border-[#E8E2D5] rounded-lg hover:bg-[#F2EBD8]"
+                >
+                  <span>Open Form</span>
+                  <ExternalLink className="w-3 h-3 text-[#77736A]" />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setIsFeedbackModalOpen(false)}
+                  className="p-1.5 text-[#77736A] hover:text-[#29271F] rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics Ribbon */}
+            {feedbackMetrics && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-[#FDFBF7] border-b border-[#E8E2D5]">
+                <div className="bg-white p-3 rounded-xl border border-[#E8E2D5]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#77736A]">Total Responses</div>
+                  <div className="text-xl font-bold text-[#493020] mt-0.5">{feedbackMetrics.totalResponses || 0}</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-[#E8E2D5]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#77736A]">Quality CSAT</div>
+                  <div className="text-xl font-bold text-emerald-700 mt-0.5">{feedbackMetrics.csatPercent || 0}%</div>
+                  <div className="text-[10px] text-[#77736A]">Rated Excellent / Good</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-[#E8E2D5]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#77736A]">Repurchase Intent</div>
+                  <div className="text-xl font-bold text-[#E4BF22] mt-0.5">{feedbackMetrics.loyaltyPercent || 0}%</div>
+                  <div className="text-[10px] text-[#77736A]">Definitely / Probably</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-[#E8E2D5]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#77736A]">No Issues Rate</div>
+                  <div className="text-xl font-bold text-blue-700 mt-0.5">
+                    {feedbackMetrics.totalResponses > 0
+                      ? Math.round(((feedbackMetrics.issueCounts?.["No issues"] || 0) / feedbackMetrics.totalResponses) * 100)
+                      : 100}%
+                  </div>
+                  <div className="text-[10px] text-[#77736A]">Flawless Experience</div>
+                </div>
+              </div>
+            )}
+
+            {/* Submissions List */}
+            <div className="p-5 overflow-y-auto space-y-4 divide-y divide-[#F0EBE1] flex-1">
+              {loadingFeedbacks ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-[#77736A]">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#E4BF22]" />
+                  <span>Loading feedback responses...</span>
+                </div>
+              ) : feedbacks.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-[#FCFAF3] border border-[#E8E2D5] flex items-center justify-center mx-auto text-[#77736A]">
+                    <MessageSquare className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-bold text-[#493020]">No Customer Feedback Submitted Yet</p>
+                  <p className="text-xs text-[#77736A] max-w-sm mx-auto">
+                    Share the feedback form link with your customers or print the QR code on bottle labels.
+                  </p>
+                  <button
+                    onClick={handleCopyFeedbackLink}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-[#493020] bg-[#E4BF22] hover:bg-[#cfac18] rounded-xl shadow-xs"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Copy Feedback Link
+                  </button>
+                </div>
+              ) : (
+                feedbacks.map((item: any) => (
+                  <div key={item.id} className="pt-4 first:pt-0 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-[#493020] text-sm">
+                          {item.customerName || "Anonymous Customer"}
+                        </span>
+                        {item.customerPhone && (
+                          <span className="text-[#77736A] font-mono text-xs">({item.customerPhone})</span>
+                        )}
+                        {item.city && (
+                          <span className="bg-[#FCFAF3] text-[#77736A] px-2 py-0.5 rounded border border-[#E8E2D5] text-[10px]">
+                            {item.city}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[#77736A] text-[11px]">
+                        {new Date(item.createdAt).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+
+                    {/* Ratings Badges Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">1. Overall Quality</span>
+                        <span className={`font-bold ${item.overallQuality === "Excellent" || item.overallQuality === "Good" ? "text-emerald-700" : "text-amber-700"}`}>
+                          {item.overallQuality}
+                        </span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">2. Natural Aroma</span>
+                        <span className="font-bold text-[#493020]">{item.naturalAroma}</span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">3. Taste & Flavour</span>
+                        <span className="font-bold text-[#493020]">{item.tasteAndFlavour}</span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">4. Colour & Texture</span>
+                        <span className="font-bold text-[#493020]">{item.colourTexture}</span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">5. Cooking Performance</span>
+                        <span className="font-bold text-[#493020]">{item.cookingPerformance}</span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">6. Packaging Quality</span>
+                        <span className="font-bold text-[#493020]">{item.packagingQuality}</span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">7. Issues Noticed</span>
+                        <span className={`font-bold ${item.issuesNoticed === "No issues" ? "text-emerald-700" : "text-rose-700"}`}>
+                          {item.issuesNoticed}
+                        </span>
+                      </div>
+                      <div className="bg-[#FCFAF3] p-2 rounded-lg border border-[#E8E2D5]">
+                        <span className="text-[10px] text-[#77736A] block">8. Repurchase / Recommend</span>
+                        <span className="font-bold text-[#E4BF22]">{item.repurchaseRecommend}</span>
+                      </div>
+                    </div>
+
+                    {/* Issue Details or Comments if present */}
+                    {(item.issuesDetails || item.additionalComments) && (
+                      <div className="bg-[#FFFDF7] p-3 rounded-xl border border-[#E4BF22]/30 text-xs space-y-1">
+                        {item.issuesDetails && (
+                          <div>
+                            <strong className="text-rose-800">Issue Note:</strong> {item.issuesDetails}
+                          </div>
+                        )}
+                        {item.additionalComments && (
+                          <div>
+                            <strong className="text-[#493020]">Customer Note:</strong> {item.additionalComments}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-[#E8E2D5] bg-[#FCFAF3] flex items-center justify-between">
+              <span className="text-xs text-[#77736A]">
+                Showing {feedbacks.length} feedback response{feedbacks.length !== 1 ? "s" : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsFeedbackModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-[#493020] bg-white border border-[#E8E2D5] hover:bg-[#F2EBD8] rounded-xl shadow-xs"
+              >
+                Close
               </button>
             </div>
           </div>
