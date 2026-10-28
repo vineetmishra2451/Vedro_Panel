@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Award,
@@ -12,16 +12,18 @@ import {
   AlertCircle,
   ThumbsUp,
   CheckCircle2,
+  ArrowRight,
+  ArrowLeft,
+  Check,
   Send,
-  MessageSquare,
   User,
   Phone,
   MapPin,
   Mail,
   Heart,
-  ShieldCheck,
   RefreshCw,
   ExternalLink,
+  MessageSquare,
 } from "lucide-react";
 import { VedroLogo } from "@/components/shared/vedro-logo";
 
@@ -49,7 +51,7 @@ interface QuestionConfig {
   title: string;
   subtitle?: string;
   icon: any;
-  options: { label: string; description?: string }[];
+  options: { key: string; label: string; description?: string }[];
 }
 
 const QUESTIONS: QuestionConfig[] = [
@@ -61,11 +63,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "Your general impression of our traditional cold-pressed kachi ghani mustard oil",
     icon: Award,
     options: [
-      { label: "Excellent", description: "Top tier, pure & authentic" },
-      { label: "Good", description: "Satisfied with the quality" },
-      { label: "Average", description: "Meets basic expectations" },
-      { label: "Poor", description: "Below expected quality" },
-      { label: "Very Poor", description: "Unsatisfactory experience" },
+      { key: "1", label: "Excellent", description: "Top tier, pure & authentic" },
+      { key: "2", label: "Good", description: "Satisfied with the quality" },
+      { key: "3", label: "Average", description: "Meets basic expectations" },
+      { key: "4", label: "Poor", description: "Below expected quality" },
+      { key: "5", label: "Very Poor", description: "Unsatisfactory experience" },
     ],
   },
   {
@@ -76,11 +78,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "The distinct, authentic pungency (jhal) and natural fragrance of fresh mustard seeds",
     icon: Sparkles,
     options: [
-      { label: "Very Satisfied", description: "Rich, natural pungent aroma" },
-      { label: "Satisfied", description: "Pleasant & authentic smell" },
-      { label: "Neutral", description: "Neither strong nor weak" },
-      { label: "Dissatisfied", description: "Lacking natural aroma" },
-      { label: "Very Dissatisfied", description: "Unpleasant or unusual smell" },
+      { key: "1", label: "Very Satisfied", description: "Rich, natural pungent aroma" },
+      { key: "2", label: "Satisfied", description: "Pleasant & authentic smell" },
+      { key: "3", label: "Neutral", description: "Neither strong nor weak" },
+      { key: "4", label: "Dissatisfied", description: "Lacking natural aroma" },
+      { key: "5", label: "Very Dissatisfied", description: "Unpleasant or unusual smell" },
     ],
   },
   {
@@ -91,11 +93,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "How well it enriches traditional curries, tadka, pickles, and everyday cooking",
     icon: Flame,
     options: [
-      { label: "Excellent", description: "Rich, authentic traditional flavour" },
-      { label: "Good", description: "Good taste, complements food well" },
-      { label: "Average", description: "Standard taste, nothing distinctive" },
-      { label: "Poor", description: "Weak flavour or slight off-taste" },
-      { label: "Very Poor", description: "Unpleasant bitter or burnt taste" },
+      { key: "1", label: "Excellent", description: "Rich, authentic traditional flavour" },
+      { key: "2", label: "Good", description: "Good taste, complements food well" },
+      { key: "3", label: "Average", description: "Standard taste, nothing distinctive" },
+      { key: "4", label: "Poor", description: "Weak flavour or slight off-taste" },
+      { key: "5", label: "Very Poor", description: "Unpleasant bitter or burnt taste" },
     ],
   },
   {
@@ -106,11 +108,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "Golden-amber clarity, natural viscosity, and pure sediment-free appearance",
     icon: Droplets,
     options: [
-      { label: "Very Satisfied", description: "Clear golden colour & perfect thickness" },
-      { label: "Satisfied", description: "Natural appearance and good texture" },
-      { label: "Neutral", description: "Standard appearance" },
-      { label: "Dissatisfied", description: "Too dark, light, or cloudy" },
-      { label: "Very Dissatisfied", description: "Heavy sediments or unusual texture" },
+      { key: "1", label: "Very Satisfied", description: "Clear golden colour & perfect thickness" },
+      { key: "2", label: "Satisfied", description: "Natural appearance and good texture" },
+      { key: "3", label: "Neutral", description: "Standard appearance" },
+      { key: "4", label: "Dissatisfied", description: "Too dark, light, or cloudy" },
+      { key: "5", label: "Very Dissatisfied", description: "Heavy sediments or unusual texture" },
     ],
   },
   {
@@ -121,11 +123,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "Heat tolerance, smoke point, and low oil absorption during frying and sautéing",
     icon: ChefHat,
     options: [
-      { label: "Excellent", description: "High smoke point, low absorption" },
-      { label: "Good", description: "Cooks evenly with good stability" },
-      { label: "Average", description: "Standard cooking performance" },
-      { label: "Poor", description: "Smoked too quickly or absorbed heavily" },
-      { label: "Very Poor", description: "Frothed excessively or spoiled food" },
+      { key: "1", label: "Excellent", description: "High smoke point, low absorption" },
+      { key: "2", label: "Good", description: "Cooks evenly with good stability" },
+      { key: "3", label: "Average", description: "Standard cooking performance" },
+      { key: "4", label: "Poor", description: "Smoked too quickly or absorbed heavily" },
+      { key: "5", label: "Very Poor", description: "Frothed excessively or spoiled food" },
     ],
   },
   {
@@ -136,11 +138,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "Bottle durability, spill-proof cap seal, convenient pour spout, and design",
     icon: Package,
     options: [
-      { label: "Very Satisfied", description: "Sturdy, leak-proof, easy to pour" },
-      { label: "Satisfied", description: "Good quality bottle & secure seal" },
-      { label: "Neutral", description: "Standard packaging" },
-      { label: "Dissatisfied", description: "Difficult cap or minor leakage" },
-      { label: "Very Dissatisfied", description: "Broken bottle or defective cap" },
+      { key: "1", label: "Very Satisfied", description: "Sturdy, leak-proof, easy to pour" },
+      { key: "2", label: "Satisfied", description: "Good quality bottle & secure seal" },
+      { key: "3", label: "Neutral", description: "Standard packaging" },
+      { key: "4", label: "Dissatisfied", description: "Difficult cap or minor leakage" },
+      { key: "5", label: "Very Dissatisfied", description: "Broken bottle or defective cap" },
     ],
   },
   {
@@ -151,11 +153,11 @@ const QUESTIONS: QuestionConfig[] = [
     subtitle: "Please select if you experienced any issue, or choose 'No issues'",
     icon: AlertCircle,
     options: [
-      { label: "No issues", description: "Everything was fresh, pure & perfect" },
-      { label: "Aroma or taste", description: "Pungency or flavour was not as expected" },
-      { label: "Colour or consistency", description: "Unusual thickness, colour, or sediments" },
-      { label: "Packaging or leakage", description: "Damaged bottle, defective seal, or transit leak" },
-      { label: "Other", description: "Another issue (please specify below)" },
+      { key: "1", label: "No issues", description: "Everything was fresh, pure & perfect" },
+      { key: "2", label: "Aroma or taste", description: "Pungency or flavour was not as expected" },
+      { key: "3", label: "Colour or consistency", description: "Unusual thickness, colour, or sediments" },
+      { key: "4", label: "Packaging or leakage", description: "Damaged bottle, defective seal, or transit leak" },
+      { key: "5", label: "Other", description: "Another issue (please specify details)" },
     ],
   },
   {
@@ -163,19 +165,24 @@ const QUESTIONS: QuestionConfig[] = [
     field: "repurchaseRecommend",
     questionNumber: 8,
     title: "How likely are you to purchase Vedro Mustard Oil again and recommend it to others?",
-    subtitle: "Would you choose Vedro again or recommend it to your family, friends, and neighbours?",
+    subtitle: "Would you choose Vedro again or recommend it to family and friends?",
     icon: ThumbsUp,
     options: [
-      { label: "Definitely", description: "Will buy regularly & recommend warmly" },
-      { label: "Probably", description: "Likely to purchase again" },
-      { label: "Not Sure", description: "Might explore or compare" },
-      { label: "Probably Not", description: "Unlikely to repurchase" },
-      { label: "Definitely Not", description: "Will not purchase again" },
+      { key: "1", label: "Definitely", description: "Will buy regularly & recommend warmly" },
+      { key: "2", label: "Probably", description: "Likely to purchase again" },
+      { key: "3", label: "Not Sure", description: "Might explore or compare" },
+      { key: "4", label: "Probably Not", description: "Unlikely to repurchase" },
+      { key: "5", label: "Definitely Not", description: "Will not purchase again" },
     ],
   },
 ];
 
+// Step count: 8 Questions (steps 0 to 7) + 1 Contact/Optional Step (step 8)
+const TOTAL_QUESTION_STEPS = QUESTIONS.length;
+const TOTAL_STEPS = TOTAL_QUESTION_STEPS + 1;
+
 export default function CustomerFeedbackPage() {
+  const [currentStep, setCurrentStep] = useState(0); // 0 to 8
   const [form, setForm] = useState<FeedbackFormState>({
     customerName: "",
     customerPhone: "",
@@ -197,36 +204,90 @@ export default function CustomerFeedbackPage() {
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Compute number of questions answered out of 8
-  const answeredCount = QUESTIONS.filter((q) => Boolean(form[q.field])).length;
-  const progressPercent = Math.round((answeredCount / QUESTIONS.length) * 100);
+  const isFinalContactStep = currentStep === TOTAL_QUESTION_STEPS;
+  const currentQuestion = !isFinalContactStep ? QUESTIONS[currentStep] : null;
 
+  // Calculate overall answered questions
+  const answeredCount = QUESTIONS.filter((q) => Boolean(form[q.field])).length;
+  const progressPercent = Math.round(((currentStep + (isFinalContactStep ? 1 : 0)) / TOTAL_STEPS) * 100);
+
+  // Auto-advance helper on option select
   const handleSelectOption = (field: keyof FeedbackFormState, value: string) => {
     setForm((prev) => ({
       ...prev,
       [field]: value,
-      // Reset issuesDetails if not "Other"
       ...(field === "issuesNoticed" && value !== "Other" ? { issuesDetails: "" } : {}),
     }));
     setErrorMessage(null);
+
+    // If selecting "Other" on question 7, don't auto-advance so customer can type details
+    if (field === "issuesNoticed" && value === "Other") {
+      return;
+    }
+
+    // Auto-advance to next step smoothly after 300ms
+    setTimeout(() => {
+      setCurrentStep((prev) => Math.min(prev + 1, TOTAL_STEPS - 1));
+    }, 280);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleNext = () => {
+    if (currentQuestion && !form[currentQuestion.field]) {
+      setErrorMessage("Please select an answer to proceed.");
+      return;
+    }
+    setErrorMessage(null);
+    setCurrentStep((prev) => Math.min(prev + 1, TOTAL_STEPS - 1));
+  };
+
+  const handlePrev = () => {
+    setErrorMessage(null);
+    setCurrentStep((prev) => Math.max(prev - 1, 0));
+  };
+
+  // Keyboard shortcut listener (1-5 to pick option, Enter to proceed, Esc/Left to go back)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input or textarea
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      if (!isFinalContactStep && currentQuestion) {
+        if (["1", "2", "3", "4", "5"].includes(e.key)) {
+          const index = parseInt(e.key) - 1;
+          const opt = currentQuestion.options[index];
+          if (opt) {
+            handleSelectOption(currentQuestion.field, opt.label);
+          }
+        }
+      }
+
+      if (e.key === "Enter" && !isFinalContactStep && currentQuestion && form[currentQuestion.field]) {
+        handleNext();
+      }
+
+      if (e.key === "ArrowLeft" && currentStep > 0) {
+        handlePrev();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentStep, currentQuestion, form, isFinalContactStep]);
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
 
     // Verify all 8 questions are answered
     const unanswered = QUESTIONS.filter((q) => !form[q.field]);
     if (unanswered.length > 0) {
-      setErrorMessage(
-        `Please answer all questions before submitting. Remaining: ${unanswered.length} question${
-          unanswered.length > 1 ? "s" : ""
-        }.`
-      );
-      // Smooth scroll to the first unanswered question
-      const firstUnansweredEl = document.getElementById(unanswered[0].id);
-      if (firstUnansweredEl) {
-        firstUnansweredEl.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
+      setErrorMessage(`Please answer question ${unanswered[0].questionNumber} before submitting.`);
+      const idx = QUESTIONS.findIndex((q) => q.id === unanswered[0].id);
+      if (idx !== -1) setCurrentStep(idx);
       return;
     }
 
@@ -246,7 +307,6 @@ export default function CustomerFeedbackPage() {
       }
 
       setIsSuccess(true);
-      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err: any) {
       console.error("Submission error:", err);
       setErrorMessage(err.message || "Failed to submit feedback. Please check your internet connection.");
@@ -272,64 +332,55 @@ export default function CustomerFeedbackPage() {
       repurchaseRecommend: "",
       additionalComments: "",
     });
+    setCurrentStep(0);
     setIsSuccess(false);
     setErrorMessage(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   return (
-    <div className="min-h-screen bg-[#FCFAF3] text-[#2A1B12] font-sans selection:bg-[#E4BF22]/30">
-      {/* Top Brand Banner */}
-      <header className="sticky top-0 z-30 bg-[#493020] text-[#FCFAF3] border-b border-[#3b2619] shadow-md">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="hover:opacity-95 transition-opacity inline-flex items-center">
-            <VedroLogo variant="dark" size="sm" showTagline={false} />
-          </Link>
-          <div className="flex items-center gap-2 text-xs text-[#E8E2D5]/80 bg-[#3b2619] px-3 py-1.5 rounded-full border border-[#5a3a27]">
-            <ShieldCheck className="w-3.5 h-3.5 text-[#E4BF22]" />
-            <span className="font-medium hidden sm:inline">100% Cold-Pressed Purity</span>
-            <span className="font-medium sm:hidden">Purity First</span>
-          </div>
-        </div>
+    <div className="min-h-screen bg-[#FCFAF3] text-[#2A1B12] flex flex-col font-sans selection:bg-[#E4BF22]/30">
+      {/* 1. Slim Top Progress Bar */}
+      <div className="w-full bg-[#E8E2D5]/50 h-1.5 fixed top-0 left-0 right-0 z-50">
+        <div
+          className="bg-gradient-to-r from-[#E4BF22] to-[#493020] h-full transition-all duration-300 ease-out"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
 
-        {/* Dynamic Progress Indicator */}
+      {/* 2. Minimal Navigation Header */}
+      <header className="w-full max-w-2xl mx-auto px-5 sm:px-8 pt-6 pb-2 flex items-center justify-between">
+        <Link href="/" className="hover:opacity-90 transition-opacity">
+          <VedroLogo variant="light" size="sm" showTagline={false} />
+        </Link>
+
         {!isSuccess && (
-          <div className="w-full bg-[#3b2619] h-1.5">
-            <div
-              className="bg-gradient-to-r from-[#E4BF22] to-[#f4cf36] h-full transition-all duration-300 ease-out"
-              style={{ width: `${progressPercent}%` }}
-            />
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[#77736A] tracking-wider uppercase">
+              {isFinalContactStep ? "Final Details" : `Step ${currentStep + 1} of ${TOTAL_STEPS}`}
+            </span>
+            <div className="w-2 h-2 rounded-full bg-[#E4BF22]" />
           </div>
         )}
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+      {/* 3. Main Stage */}
+      <main className="flex-1 flex flex-col justify-center max-w-2xl w-full mx-auto px-5 sm:px-8 py-6">
         {isSuccess ? (
           /* Success Screen */
-          <div className="bg-white rounded-3xl p-8 sm:p-12 border border-[#E8E2D5] shadow-xl text-center space-y-6 animate-in fade-in zoom-in-95 duration-300">
-            <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto border-4 border-emerald-100 shadow-inner">
+          <div className="text-center space-y-6 animate-in fade-in zoom-in-95 duration-300 py-8">
+            <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto border-4 border-emerald-100 shadow-sm">
               <CheckCircle2 className="w-10 h-10" />
             </div>
 
-            <div className="space-y-3">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-[#E4BF22]/20 text-[#493020] border border-[#E4BF22]/30">
-                <Heart className="w-3 h-3 text-[#493020] fill-[#493020]" /> Response Received
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-[#E4BF22]/20 text-[#493020]">
+                <Heart className="w-3.5 h-3.5 fill-[#493020]" /> Response Saved
               </span>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#493020] tracking-tight">
                 Thank You for Your Feedback!
               </h1>
-              <p className="text-sm sm:text-base text-[#6B584C] max-w-lg mx-auto leading-relaxed">
-                Your valuable insights help us maintain the uncompromising purity, aroma, and authentic kachi ghani tradition of <strong className="text-[#493020]">Vedro Mustard Oil</strong>.
-              </p>
-            </div>
-
-            <div className="bg-[#FCFAF3] rounded-2xl p-5 border border-[#E8E2D5] max-w-md mx-auto text-left space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wider text-[#77736A]">
-                Our Promise to You
-              </div>
-              <p className="text-xs text-[#493020] leading-relaxed">
-                Every drop of Vedro is cold-pressed at low temperatures to retain its natural antioxidants, authentic pungency, and vital nutrients. We review every customer response to ensure premium quality.
+              <p className="text-sm text-[#77736A] max-w-md mx-auto leading-relaxed">
+                Your response directly guides our extraction and quality standards to ensure 100% authentic kachi ghani purity.
               </p>
             </div>
 
@@ -337,7 +388,7 @@ export default function CustomerFeedbackPage() {
               <button
                 type="button"
                 onClick={handleReset}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#493020] text-[#FCFAF3] font-bold text-sm hover:bg-[#3b2619] transition-all shadow-md active:scale-95"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#493020] text-[#FCFAF3] font-bold text-sm hover:bg-[#3b2619] transition-all shadow-sm active:scale-95"
               >
                 <RefreshCw className="w-4 h-4" /> Submit Another Response
               </button>
@@ -345,293 +396,257 @@ export default function CustomerFeedbackPage() {
                 href="https://wa.me/919999999999?text=Hi%20Vedro%20Team%2C%20I%20just%20submitted%20feedback%20for%20Vedro%20Mustard%20Oil!"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#FCFAF3] text-[#493020] border border-[#E8E2D5] font-semibold text-sm hover:bg-[#F3EFE6] transition-all active:scale-95"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-white text-[#493020] border border-[#E8E2D5] font-semibold text-sm hover:bg-[#F3EFE6] transition-all"
               >
-                <MessageSquare className="w-4 h-4 text-emerald-600" /> WhatsApp Us <ExternalLink className="w-3.5 h-3.5 text-[#77736A]" />
+                <MessageSquare className="w-4 h-4 text-emerald-600" /> WhatsApp Us <ExternalLink className="w-3 h-3 text-[#77736A]" />
               </a>
             </div>
           </div>
-        ) : (
-          /* Feedback Form */
-          <form onSubmit={handleSubmit} className="space-y-8">
-            {/* Hero Header */}
-            <div className="bg-gradient-to-br from-[#493020] to-[#342217] rounded-3xl p-6 sm:p-10 text-[#FCFAF3] shadow-lg border border-[#3b2619] relative overflow-hidden">
-              <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-[#E4BF22]/10 rounded-full blur-2xl pointer-events-none" />
-              <div className="relative z-10 space-y-3">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-[#E4BF22]/20 text-[#E4BF22] border border-[#E4BF22]/30">
-                  <Sparkles className="w-3.5 h-3.5" /> Customer Quality Survey
-                </div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight leading-tight">
-                  Vedro Mustard Oil Feedback
-                </h1>
-                <p className="text-xs sm:text-sm text-[#E8E2D5]/90 max-w-xl leading-relaxed">
-                  Help us serve you better. Please take 2 minutes to share your genuine experience with our cold-pressed mustard oil across quality, aroma, taste, and packaging.
-                </p>
-                <div className="pt-2 flex items-center gap-3 text-xs text-[#E8E2D5]/70">
-                  <span className="font-semibold text-[#E4BF22]">{answeredCount} of 8 Questions Answered</span>
-                  <span>•</span>
-                  <span>Takes ~2 minutes</span>
-                </div>
+        ) : !isFinalContactStep && currentQuestion ? (
+          /* Single Question Step */
+          <div
+            key={currentQuestion.id}
+            className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-250 ease-out"
+          >
+            {/* Question Heading */}
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 text-xs font-bold text-[#E4BF22] bg-[#493020] px-2.5 py-1 rounded-md tracking-wider uppercase">
+                Question {currentQuestion.questionNumber} of 8
               </div>
+              <h1 className="text-xl sm:text-2xl font-extrabold text-[#493020] tracking-tight leading-snug">
+                {currentQuestion.title}
+              </h1>
+              {currentQuestion.subtitle && (
+                <p className="text-xs sm:text-sm text-[#77736A] leading-relaxed">
+                  {currentQuestion.subtitle}
+                </p>
+              )}
             </div>
 
-            {/* Optional Customer Contact Section */}
-            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#E8E2D5] shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-[#F0EBE1] pb-3">
-                <div>
-                  <h2 className="text-base font-bold text-[#493020]">Your Details (Optional)</h2>
-                  <p className="text-xs text-[#77736A]">
-                    Leave your contact details if you would like our quality team to follow up with you.
-                  </p>
-                </div>
-                <span className="text-[11px] font-semibold text-[#77736A] bg-[#FCFAF3] px-2.5 py-1 rounded-md border border-[#E8E2D5]">
-                  Optional
-                </span>
-              </div>
+            {/* Options List */}
+            <div className="space-y-2.5 pt-1">
+              {currentQuestion.options.map((opt) => {
+                const isSelected = form[currentQuestion.field] === opt.label;
+                return (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => handleSelectOption(currentQuestion.field, opt.label)}
+                    className={`w-full flex items-center justify-between p-4 rounded-2xl border text-left transition-all active:scale-[0.99] cursor-pointer ${
+                      isSelected
+                        ? "bg-[#FFFDF5] border-[#E4BF22] ring-2 ring-[#E4BF22] shadow-sm text-[#493020]"
+                        : "bg-white border-[#E8E2D5] hover:border-[#D5CDBD] hover:bg-[#FCFAF3] text-[#2A1B12]"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <span
+                        className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 border transition-colors ${
+                          isSelected
+                            ? "bg-[#493020] text-white border-[#493020]"
+                            : "bg-[#FCFAF3] text-[#77736A] border-[#E8E2D5]"
+                        }`}
+                      >
+                        {opt.key}
+                      </span>
+                      <div className="space-y-0.5">
+                        <div className="text-sm font-bold tracking-tight">{opt.label}</div>
+                        {opt.description && (
+                          <div className="text-xs text-[#77736A]">{opt.description}</div>
+                        )}
+                      </div>
+                    </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                    <div
+                      className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                        isSelected
+                          ? "border-[#493020] bg-[#493020] text-white"
+                          : "border-[#D5CDBD] bg-white"
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3 text-[#E4BF22]" />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Optional Input for Q7 "Other" */}
+            {currentQuestion.id === "q7" && form.issuesNoticed === "Other" && (
+              <div className="pt-2 animate-in fade-in duration-200 space-y-1.5">
+                <label className="block text-xs font-bold text-[#493020]">
+                  Please describe what you noticed:
+                </label>
+                <textarea
+                  rows={2}
+                  value={form.issuesDetails}
+                  onChange={(e) => setForm({ ...form, issuesDetails: e.target.value })}
+                  placeholder="Share details so our quality team can address it..."
+                  className="w-full px-3.5 py-2.5 bg-white border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] transition-all text-[#2A1B12]"
+                />
+              </div>
+            )}
+
+            {/* Error Message */}
+            {errorMessage && (
+              <p className="text-xs font-semibold text-rose-600 animate-in fade-in">
+                {errorMessage}
+              </p>
+            )}
+
+            {/* Navigation Buttons for this step */}
+            <div className="pt-4 flex items-center justify-between border-t border-[#E8E2D5]">
+              <button
+                type="button"
+                onClick={handlePrev}
+                disabled={currentStep === 0}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-[#77736A] hover:text-[#493020] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" /> Back
+              </button>
+
+              <div className="flex items-center gap-3">
+                <span className="hidden sm:inline text-[11px] text-[#77736A]">
+                  Press <kbd className="px-1.5 py-0.5 rounded bg-white border border-[#E8E2D5] text-[10px] font-mono">1-5</kbd> to select
+                </span>
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  disabled={!form[currentQuestion.field]}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs bg-[#493020] text-[#FCFAF3] hover:bg-[#3b2619] disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-xs"
+                >
+                  Continue <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Step 9: Final Contact Details & Comments */
+          <form
+            onSubmit={handleSubmit}
+            className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-250 ease-out"
+          >
+            <div className="space-y-1">
+              <span className="inline-flex items-center gap-2 text-xs font-bold text-[#E4BF22] bg-[#493020] px-2.5 py-1 rounded-md tracking-wider uppercase">
+                Final Step • Optional
+              </span>
+              <h1 className="text-xl sm:text-2xl font-extrabold text-[#493020] tracking-tight">
+                Almost Done! Would you like to share your details?
+              </h1>
+              <p className="text-xs sm:text-sm text-[#77736A]">
+                You can submit anonymously, or leave your phone/name if you’d like our quality team to follow up.
+              </p>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 border border-[#E8E2D5] shadow-xs space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-[#493020] mb-1.5 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-[#77736A]" /> Full Name
+                  <label className="block text-xs font-bold text-[#493020] mb-1 flex items-center gap-1.5">
+                    <User className="w-3 h-3 text-[#77736A]" /> Name
                   </label>
                   <input
                     type="text"
                     value={form.customerName}
                     onChange={(e) => setForm({ ...form, customerName: e.target.value })}
                     placeholder="e.g. Ramesh Sharma"
-                    className="w-full px-3.5 py-2.5 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
+                    className="w-full px-3 py-2 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#E4BF22] focus:bg-white text-[#2A1B12]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-[#493020] mb-1.5 flex items-center gap-1.5">
-                    <Phone className="w-3.5 h-3.5 text-[#77736A]" /> Phone Number
+                  <label className="block text-xs font-bold text-[#493020] mb-1 flex items-center gap-1.5">
+                    <Phone className="w-3 h-3 text-[#77736A]" /> Phone Number
                   </label>
                   <input
                     type="tel"
                     value={form.customerPhone}
                     onChange={(e) => setForm({ ...form, customerPhone: e.target.value })}
                     placeholder="e.g. 9876543210"
-                    className="w-full px-3.5 py-2.5 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
+                    className="w-full px-3 py-2 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#E4BF22] focus:bg-white text-[#2A1B12]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-[#493020] mb-1.5 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-[#77736A]" /> City / Town
+                  <label className="block text-xs font-bold text-[#493020] mb-1 flex items-center gap-1.5">
+                    <MapPin className="w-3 h-3 text-[#77736A]" /> City
                   </label>
                   <input
                     type="text"
                     value={form.city}
                     onChange={(e) => setForm({ ...form, city: e.target.value })}
-                    placeholder="e.g. Delhi, Lucknow, Kanpur"
-                    className="w-full px-3.5 py-2.5 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
+                    placeholder="e.g. Delhi, Lucknow"
+                    className="w-full px-3 py-2 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#E4BF22] focus:bg-white text-[#2A1B12]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-[#493020] mb-1.5 flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 text-[#77736A]" /> Email (Optional)
+                  <label className="block text-xs font-bold text-[#493020] mb-1 flex items-center gap-1.5">
+                    <Mail className="w-3 h-3 text-[#77736A]" /> Email
                   </label>
                   <input
                     type="email"
                     value={form.customerEmail}
                     onChange={(e) => setForm({ ...form, customerEmail: e.target.value })}
                     placeholder="e.g. ramesh@gmail.com"
-                    className="w-full px-3.5 py-2.5 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
+                    className="w-full px-3 py-2 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#E4BF22] focus:bg-white text-[#2A1B12]"
                   />
                 </div>
               </div>
-            </div>
 
-            {/* The 8 Specific Questions */}
-            <div className="space-y-6">
-              {QUESTIONS.map((q) => {
-                const IconComponent = q.icon;
-                const selectedVal = form[q.field];
-                const isAnswered = Boolean(selectedVal);
-
-                return (
-                  <div
-                    key={q.id}
-                    id={q.id}
-                    className={`bg-white rounded-3xl p-6 sm:p-8 border transition-all duration-200 shadow-sm ${
-                      isAnswered
-                        ? "border-[#E4BF22] ring-1 ring-[#E4BF22]/30"
-                        : "border-[#E8E2D5] hover:border-[#D5CDBD]"
-                    }`}
-                  >
-                    {/* Question Header */}
-                    <div className="flex items-start gap-3.5 mb-4">
-                      <div
-                        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                          isAnswered
-                            ? "bg-[#E4BF22] text-[#493020]"
-                            : "bg-[#FCFAF3] text-[#77736A] border border-[#E8E2D5]"
-                        }`}
-                      >
-                        <IconComponent className="w-4 h-4" />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-[#E4BF22] bg-[#493020] px-2 py-0.5 rounded-md">
-                            Question {q.questionNumber}
-                          </span>
-                          {isAnswered && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3" /> Answered
-                            </span>
-                          )}
-                        </div>
-                        <h2 className="text-base sm:text-lg font-bold text-[#493020] leading-snug">
-                          {q.title}
-                        </h2>
-                        {q.subtitle && (
-                          <p className="text-xs text-[#77736A] leading-relaxed">
-                            {q.subtitle}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Radio Options Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-                      {q.options.map((opt) => {
-                        const isSelected = selectedVal === opt.label;
-                        return (
-                          <button
-                            key={opt.label}
-                            type="button"
-                            onClick={() => handleSelectOption(q.field, opt.label)}
-                            className={`flex items-start gap-3 text-left p-3.5 rounded-2xl border transition-all active:scale-[0.98] ${
-                              isSelected
-                                ? "bg-[#FFFDF5] border-[#E4BF22] ring-2 ring-[#E4BF22] shadow-sm text-[#493020]"
-                                : "bg-[#FCFAF3] border-[#E8E2D5] hover:bg-white hover:border-[#D5CDBD] text-[#2A1B12]"
-                            }`}
-                          >
-                            <div
-                              className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                                isSelected
-                                  ? "border-[#493020] bg-[#493020] text-white"
-                                  : "border-[#B8AFA6] bg-white"
-                              }`}
-                            >
-                              {isSelected && <div className="w-2 h-2 rounded-full bg-[#E4BF22]" />}
-                            </div>
-                            <div className="space-y-0.5">
-                              <div className="text-sm font-bold tracking-tight">
-                                {opt.label}
-                              </div>
-                              {opt.description && (
-                                <div className="text-xs text-[#77736A] leading-snug">
-                                  {opt.description}
-                                </div>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Specific detail text area for Q7 when "Other" is picked */}
-                    {q.id === "q7" && form.issuesNoticed === "Other" && (
-                      <div className="mt-4 pt-3 border-t border-[#F0EBE1] animate-in fade-in duration-200">
-                        <label className="block text-xs font-bold text-[#493020] mb-1.5">
-                          Please describe the issue in detail:
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={form.issuesDetails}
-                          onChange={(e) => setForm({ ...form, issuesDetails: e.target.value })}
-                          placeholder="Tell us what you noticed so our team can resolve it..."
-                          className="w-full px-3.5 py-2.5 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Optional Additional Comments */}
-            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#E8E2D5] shadow-sm space-y-3">
-              <div className="flex items-center gap-2 text-sm font-bold text-[#493020]">
-                <MessageSquare className="w-4 h-4 text-[#77736A]" />
-                Any Additional Suggestions or Comments? (Optional)
+              <div>
+                <label className="block text-xs font-bold text-[#493020] mb-1 flex items-center gap-1.5">
+                  <MessageSquare className="w-3 h-3 text-[#77736A]" /> Additional Comments or Suggestions
+                </label>
+                <textarea
+                  rows={2}
+                  value={form.additionalComments}
+                  onChange={(e) => setForm({ ...form, additionalComments: e.target.value })}
+                  placeholder="Tell us what you loved or how we can improve..."
+                  className="w-full px-3 py-2 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#E4BF22] focus:bg-white text-[#2A1B12]"
+                />
               </div>
-              <p className="text-xs text-[#77736A]">
-                Share any recipes, compliments, ideas for new bottle sizes, or thoughts on how we can improve.
-              </p>
-              <textarea
-                rows={3}
-                value={form.additionalComments}
-                onChange={(e) => setForm({ ...form, additionalComments: e.target.value })}
-                placeholder="Write your suggestions here..."
-                className="w-full px-4 py-3 bg-[#FCFAF3] border border-[#E8E2D5] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#E4BF22] focus:bg-white transition-all text-[#2A1B12]"
-              />
             </div>
 
-            {/* Error Message Alert */}
+            {/* Error Message */}
             {errorMessage && (
-              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start gap-3 shadow-sm animate-in fade-in duration-150">
-                <AlertCircle className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
-                <div className="space-y-1">
-                  <div className="font-bold">Missing Responses</div>
-                  <div className="text-xs text-rose-700">{errorMessage}</div>
-                </div>
-              </div>
+              <p className="text-xs font-semibold text-rose-600 animate-in fade-in">
+                {errorMessage}
+              </p>
             )}
 
-            {/* Bottom Sticky Action Bar */}
-            <div className="bg-white rounded-3xl p-5 sm:p-6 border border-[#E8E2D5] shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3 text-left w-full sm:w-auto">
-                <div className="w-10 h-10 rounded-2xl bg-[#FCFAF3] border border-[#E8E2D5] flex items-center justify-center font-bold text-sm text-[#493020]">
-                  {answeredCount}/8
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-[#493020]">
-                    {answeredCount === 8
-                      ? "All questions answered! Ready to submit."
-                      : `${8 - answeredCount} more questions needed`}
-                  </div>
-                  <div className="text-[11px] text-[#77736A]">
-                    {answeredCount === 8 ? "Thank you for your valuable time" : "Please complete all 8 ratings"}
-                  </div>
-                </div>
-              </div>
+            {/* Submit & Back Action Bar */}
+            <div className="pt-4 flex items-center justify-between border-t border-[#E8E2D5]">
+              <button
+                type="button"
+                onClick={handlePrev}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-[#77736A] hover:text-[#493020] transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" /> Back
+              </button>
 
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl font-bold text-sm shadow-md transition-all active:scale-95 ${
-                  answeredCount === 8
-                    ? "bg-[#E4BF22] text-[#493020] hover:bg-[#d8b418] cursor-pointer"
-                    : "bg-[#493020] text-[#FCFAF3] hover:bg-[#3b2619] cursor-pointer"
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-xs bg-[#E4BF22] text-[#493020] hover:bg-[#d8b418] disabled:opacity-50 transition-all shadow-sm active:scale-95 cursor-pointer"
               >
                 {isSubmitting ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" /> Submitting...
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Submitting...
                   </>
                 ) : (
                   <>
-                    <Send className="w-4 h-4" /> Submit Feedback
+                    <Send className="w-3.5 h-3.5" /> Submit Feedback
                   </>
                 )}
               </button>
             </div>
           </form>
         )}
-
-        {/* Footer */}
-        <footer className="mt-12 text-center text-xs text-[#77736A] space-y-2 border-t border-[#E8E2D5] pt-6">
-          <div className="flex items-center justify-center gap-2 font-medium text-[#493020]">
-            <VedroLogo variant="light" size="xs" />
-            <span>— Pure Cold-Pressed Mustard Oil</span>
-          </div>
-          <p>© 2026 Vedro Food Products. Crafted with authentic kachi ghani tradition.</p>
-        </footer>
       </main>
+
+      {/* 4. Minimal Footer */}
+      <footer className="w-full max-w-2xl mx-auto px-5 sm:px-8 py-4 text-center text-[11px] text-[#77736A]">
+        <span>© 2026 Vedro Food Products • Pure Cold-Pressed Mustard Oil</span>
+      </footer>
     </div>
   );
 }
